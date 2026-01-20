@@ -1,0 +1,58 @@
+cmake:
+  application:
+    configuration-dir: C:/ncs/v2.9.1/modules/hal/nordic/nrfx/samples/src/nrfx_gppi/fork
+    source-dir: C:/ncs/v2.9.1/modules/hal/nordic/nrfx/samples/src/nrfx_gppi/fork
+  board:
+    name: nrf52840dk
+    qualifiers: nrf52840
+    revision: 
+  devicetree:
+    bindings-dirs:
+     - C:/ncs/v2.9.1/nrf/dts/bindings
+     - C:/ncs/v2.9.1/zephyr/dts/bindings
+    files:
+     - C:/ncs/v2.9.1/zephyr/boards/nordic/nrf52840dk/nrf52840dk_nrf52840.dts
+     - C:/ncs/v2.9.1/modules/hal/nordic/nrfx/samples/src/nrfx_gppi/boards/nrf52840dk_nrf52840.overlay
+    include-dirs:
+     - C:/ncs/v2.9.1/nrf/include
+     - C:/ncs/v2.9.1/nrf/dts
+     - C:/ncs/v2.9.1/zephyr/include
+     - C:/ncs/v2.9.1/zephyr/include/zephyr
+     - C:/ncs/v2.9.1/zephyr/dts/common
+     - C:/ncs/v2.9.1/zephyr/dts/x86
+     - C:/ncs/v2.9.1/zephyr/dts/xtensa
+     - C:/ncs/v2.9.1/zephyr/dts/sparc
+     - C:/ncs/v2.9.1/zephyr/dts/riscv
+     - C:/ncs/v2.9.1/zephyr/dts/posix
+     - C:/ncs/v2.9.1/zephyr/dts/nios2
+     - C:/ncs/v2.9.1/zephyr/dts/arm64
+     - C:/ncs/v2.9.1/zephyr/dts/arm
+     - C:/ncs/v2.9.1/zephyr/dts/arc
+     - C:/ncs/v2.9.1/zephyr/dts
+    user-files:
+     - C:/ncs/v2.9.1/modules/hal/nordic/nrfx/samples/src/nrfx_gppi/boards/nrf52840dk_nrf52840.overlay
+  kconfig:
+    files:
+     - C:/ncs/v2.9.1/zephyr/boards/nordic/nrf52840dk/nrf52840dk_nrf52840_defconfig
+     - C:/ncs/v2.9.1/modules/hal/nordic/nrfx/samples/common/common.conf
+     - C:/ncs/v2.9.1/modules/hal/nordic/nrfx/samples/src/nrfx_gppi/fork/prj.conf
+     - C:/ncs/v2.9.1/modules/hal/nordic/nrfx/samples/src/nrfx_gppi/boards/nrf52840dk_nrf52840.conf
+     - C:/ncs/v2.9.1/modules/hal/nordic/nrfx/samples/src/nrfx_gppi/fork/build/zephyr/misc/generated/extra_kconfig_options.conf
+    user-files:
+     - C:/ncs/v2.9.1/modules/hal/nordic/nrfx/samples/common/common.conf
+     - C:/ncs/v2.9.1/modules/hal/nordic/nrfx/samples/src/nrfx_gppi/fork/prj.conf
+     - C:/ncs/v2.9.1/modules/hal/nordic/nrfx/samples/src/nrfx_gppi/boards/nrf52840dk_nrf52840.conf
+  toolchain:
+    name: zephyr
+    path: C:/ncs/toolchains/0b393f9e1b/opt/zephyr-sdk
+  vendor-specific:
+    nordic:
+      svdfile: C:/ncs/v2.9.1/modules/hal/nordic/nrfx/mdk/nrf52840.svd
+  zephyr:
+    version: 3.7.99
+    zephyr-base: C:/ncs/v2.9.1/zephyr
+version: 0.1.0
+west:
+  command: C:\ncs\toolchains\0b393f9e1b\opt\bin\Scripts\west build --build-dir c:/ncs/v2.9.1/modules/hal/nordic/nrfx/samples/src/nrfx_gppi/fork/build c:/ncs/v2.9.1/modules/hal/nordic/nrfx/samples/src/nrfx_gppi/fork --pristine --board nrf52840dk/nrf52840 --no-sysbuild -- -DNCS_TOOLCHAIN_VERSION=NONE -DDEBUG_THREAD_INFO=On -DCONFIG_DEBUG_THREAD_INFO=n
+  topdir: c:\ncs\v2.9.1
+  version: 1.2.0
