@@ -33,9 +33,9 @@
 #define SAADC_CHANNEL_AIN NRF_SAADC_INPUT_AIN0
 #define SAADC_RESOLUTION NRF_SAADC_RESOLUTION_10BIT
 
-// CRITICAL: ADC interrupt batching - only wake CPU every N samples
-#define ADC_INTERRUPT_BATCH_SIZE 10  // Wake CPU only every 10th sample
-#define LOG_EVERY_N_SAMPLES 100     // Rare logging
+// CRITICAL: ADC interrupt batching - only wake CPU after each 8-pulse sequence
+#define ADC_INTERRUPT_BATCH_SIZE 8   // One sample per pulse, 8 pulses per sequence
+#define LOG_EVERY_N_SAMPLES 100      // Rare logging
 
 // Enable/disable features for power testing
 #define ENABLE_STATS_TIMER 0         // Set to 0 to disable periodic stats
