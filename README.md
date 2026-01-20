@@ -23,7 +23,7 @@ This project implements a **multi-timer event-driven system** that generates syn
 
 ## Features
 
-✅ **SAADC Double-Buffering** - Continuous ADC sampling without gaps  
+✅ **SAADC Batched Sampling** - Batches ADC interrupts (default 10 samples per wake)  
 ✅ **GPPI Hardware Triggering** - TIMER1 CC1 event triggers ADC sampling  
 ✅ **Precision Timing** - Microsecond-level calculation, no rounding errors  
 ✅ **Event-Driven Architecture** - Main loop sleeps with k_sleep(K_FOREVER)  
@@ -60,7 +60,7 @@ Mode: Advanced with external triggers only
 Trigger Source: GPPI channel 11 (TIMER1 CC1 event)
 Resolution: 10-bit
 Input: AIN0
-Buffer: Double-buffering (2x 1-sample buffers)
+Buffer: Batched buffer (ADC_INTERRUPT_BATCH_SIZE, default 10 samples)
 Auto Re-arm: start_on_end = true
 ```
 
@@ -139,15 +139,23 @@ python -m serial.tools.miniterm /dev/ttyACM0 115200
 screen /dev/ttyACM0 115200
 ```
 
-Expected output:
+Expected output (low-power defaults, stats timer disabled):
 ```
-[SAADC_INIT] Buffer set: ptr=0x... (buffer[0]), size=1
-[SAADC_INIT] SAADC enabled explicitly
-[ADC_TRIGGER] Using TIMER1 CC1 event for SAADC sampling
-GPPI channels enabled (mask: 0x2F, ADC trigger ch=11)
-[MAIN] Statistics timer started (1s period)
-[STATS] State: ACTIVE, Samples: 100 (+100), Transitions: 1
-[STATS] State: PAUSE, Samples: 101 (+1), Transitions: 2
+=== ULTRA LOW POWER MODE ===
+ADC batch size: 10 samples
+Stats timer: OFF
+SAADC batched mode initialized
+GPPI channels enabled (ADC trigger on TIMER1 CC1)
+System started - LOW POWER MODE
+
+=== LOW POWER CONFIGURATION ===
+ADC interrupt batching: 10 samples
+Stats timer: DISABLED
+Expected CPU wake-ups per second:
+  - ADC: ~10 Hz (batched)
+  - State: ~200 Hz
+  - Stats: 0 Hz
+  - BLE: variable
 ```
 
 ## Configuration
@@ -225,10 +233,10 @@ RAM: 33.4 KB (12.7% of 256KB)
 ```
 At 100Hz PULSE frequency:
 - ADC samples triggered: 1 per PULSE (CC1 event)
-- Actual sample rate: 100 samples/second (exact frequency)
-- Double-buffering ensures no sample loss
+- Samples captured: 100 samples/second (exact frequency)
+- CPU wake-ups from ADC: 10/sec with default batch size (10 samples per ISR)
 
-At higher frequencies, ADC can sample multiple times per PAUSE period
+At higher frequencies, ADC can still batch; adjust `ADC_INTERRUPT_BATCH_SIZE` for latency vs. power
 ```
 
 ## Technical Details
@@ -276,9 +284,9 @@ All work offloaded from main loop to interrupt context:
 
 ```
 TIMER2 (state machine) → ACTIVE/PAUSE transitions
-SAADC (DONE handler) → Extract sample, toggle buffer
+SAADC (DONE handler) → Processes batch completion every N samples (default 10)
 SAADC (FINISHED handler) → Restart ADC immediately
-Zephyr Timer → Print statistics every 1s
+Zephyr Timer → Optional stats every 1s (disabled by default for power)
 ```
 
 Main loop: `k_sleep(K_FOREVER)` - CPU available for BLE stack
@@ -302,7 +310,7 @@ Main loop: `k_sleep(K_FOREVER)` - CPU available for BLE stack
 | ADC not sampling | SAADC not armed | Verify `nrfx_saadc_mode_trigger()` called before timer starts |
 | Wrong frequency | Rounding in millisecond domain | Ensure microsecond-based calculation in ACTIVE→PAUSE transition |
 | BLE commands ignored | Buffer overflow | Increase `CONFIG_LOG_BUFFER_SIZE` to 4096 |
-| Missing samples | Double-buffering misconfigured | Check `m_saadc_completed_buffer_idx` toggle in DONE handler |
+| Missing samples | Batch buffer not re-armed | Ensure `nrfx_saadc_buffer_set(...)` is called in BUF_REQ/FINISHED |
 
 ## References
 
