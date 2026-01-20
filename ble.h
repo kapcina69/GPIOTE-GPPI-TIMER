@@ -38,6 +38,15 @@ uint32_t ble_get_frequency_hz(void);
 uint32_t ble_get_pulse_width_ms(void);
 
 /**
+ * @brief Get maximum allowed frequency based on pulse width
+ * Ensures that PAUSE >= 0 for 8 sequential pulses
+ * 
+ * @param pulse_width Pulse width in units of 100µs
+ * @return Maximum frequency in Hz
+ */
+uint32_t ble_get_max_frequency(uint32_t pulse_width);
+
+/**
  * @brief Check if parameters have been updated since last check
  * 
  * @return true if parameters changed, false otherwise

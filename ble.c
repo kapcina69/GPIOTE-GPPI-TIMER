@@ -18,7 +18,7 @@
 #include <nrfx_log.h>
 
 // Default values
-#define DEFAULT_FREQUENCY_HZ    100
+#define DEFAULT_FREQUENCY_HZ    1
 #define DEFAULT_PULSE_WIDTH     5  // 500ms
 
 // Limits
@@ -49,9 +49,31 @@ static const struct bt_data sd[] = {
 };
 
 /**
+ * @brief Calculate maximum allowed frequency based on pulse width
+ * max_freq = 1000000 / ((pulse_width * 200 + 100) * 8)
+ * This ensures PAUSE is always >= 0
+ */
+static uint32_t get_max_frequency(uint32_t pulse_width)
+{
+    if (pulse_width == 0) {
+        pulse_width = 1;
+    }
+    
+    uint32_t active_one_pulse_us = pulse_width * 200 + 100;
+    uint32_t active_total_us = active_one_pulse_us * 8;  // 8 sequential pulses
+    
+    if (active_total_us >= 1000000) {
+        return 1;  // Minimum 1Hz
+    }
+    
+    uint32_t max_freq = 1000000 / active_total_us;
+    return max_freq;
+}
+
+/**
  * @brief Calculate pause time from frequency
  * PAUSE = total_period - ACTIVE_duration
- * ACTIVE_duration = pulse_us * 2 + 100 us overhead
+ * ACTIVE_duration = (pulse_us * 2 + 100 us overhead) * 8 pulses
  * Koristi preciznu kalkulaciju u µs da izbegne greške zaokruživanja
  */
 static uint32_t frequency_to_pause_ms(uint32_t freq_hz)
@@ -60,13 +82,22 @@ static uint32_t frequency_to_pause_ms(uint32_t freq_hz)
         freq_hz = 1;
     }
     
+    // Ograniči frekvenciju na maximum dozvoljenu za dati pulse_width
+    uint32_t max_allowed_freq = get_max_frequency(current_pulse_width);
+    if (freq_hz > max_allowed_freq) {
+        freq_hz = max_allowed_freq;
+        NRFX_LOG_WARNING("Frequency limited to %u Hz (max for pulse_width=%u)", freq_hz, current_pulse_width);
+    }
+    
     // Ukupan period u µs (za preciznost)
     uint32_t total_period_us = 1000000 / freq_hz;
     
-    // ACTIVE period u µs
+    // ACTIVE period u µs za JEDNU pulse sekvencu
     // pulse_width je u jedinicama od 100us, pa je pulse_us = pulse_width * 100
     // ACTIVE = pulse_width * 100 * 2 + 100 = pulse_width * 200 + 100 (u us)
-    uint32_t active_period_us = current_pulse_width * 200 + 100;
+    // SA 8 PULSE SEKVENCI: ACTIVE_TOTAL = ACTIVE_one * 8
+    uint32_t active_one_pulse_us = current_pulse_width * 200 + 100;
+    uint32_t active_period_us = active_one_pulse_us * 8;  // 8 sequential pulses
     
     // PAUSE = total - ACTIVE (u µs, pa konvertuj u ms)
     if (total_period_us > active_period_us) {
@@ -249,6 +280,11 @@ uint32_t ble_get_frequency_hz(void)
 uint32_t ble_get_pulse_width_ms(void)
 {
     return current_pulse_width;
+}
+
+uint32_t ble_get_max_frequency(uint32_t pulse_width)
+{
+    return get_max_frequency(pulse_width);
 }
 
 bool ble_parameters_updated(void)
