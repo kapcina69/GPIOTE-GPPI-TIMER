@@ -86,11 +86,18 @@ static const nrfx_saadc_channel_t m_saadc_channel = {
 };
 
 typedef enum {
-    STATE_ACTIVE,
+    STATE_PULSE_1,
+    STATE_PULSE_2,
+    STATE_PULSE_3,
+    STATE_PULSE_4,
+    STATE_PULSE_5,
+    STATE_PULSE_6,
+    STATE_PULSE_7,
+    STATE_PULSE_8,
     STATE_PAUSE
 } state_t;
 
-static volatile state_t current_state = STATE_ACTIVE;
+static volatile state_t current_state = STATE_PULSE_1;
 static volatile uint32_t state_transitions = 0;
 
 /**
@@ -254,20 +261,42 @@ static void state_timer_handler(nrf_timer_event_t event_type, void * p_context)
                                     pulse_ticks * 2 + 30,
                                     NRF_TIMER_SHORT_COMPARE5_CLEAR_MASK, false);
         
-        if (current_state == STATE_ACTIVE) {
+        if (current_state >= STATE_PULSE_1 && current_state <= STATE_PULSE_8) {
             nrfx_timer_enable(&timer_pulse);
         }
     }
     
-    // State transitions (minimal work)
+    // State transitions (minimal work) - 8 pulse states + 1 pause state
+    uint32_t pulse_us = ble_get_pulse_width_ms() * 100;
+    uint32_t single_pulse_us = pulse_us * 2 + 100;
+    
     switch(current_state) {
-        case STATE_ACTIVE: {
+        case STATE_PULSE_1:
+        case STATE_PULSE_2:
+        case STATE_PULSE_3:
+        case STATE_PULSE_4:
+        case STATE_PULSE_5:
+        case STATE_PULSE_6:
+        case STATE_PULSE_7: {
+            // Reset TIMER1 for next pulse and go to next pulse state
+            nrfx_timer_clear(&timer_pulse);
+            current_state = (state_t)(current_state + 1);
+            
+            nrfx_timer_disable(&timer_state);
+            nrfx_timer_clear(&timer_state);
+            uint32_t pulse_ticks = nrfx_timer_us_to_ticks(&timer_state, single_pulse_us);
+            nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL0, pulse_ticks, true);
+            nrfx_timer_enable(&timer_state);
+            break;
+        }
+        
+        case STATE_PULSE_8: {
+            // After 8th pulse, go to PAUSE
             nrfx_timer_disable(&timer_pulse);
             current_state = STATE_PAUSE;
             
             uint32_t freq_hz = ble_get_frequency_hz();
-            uint32_t pulse_us = ble_get_pulse_width_ms() * 100;
-            uint32_t active_period_us = pulse_us * 2 + 100;
+            uint32_t active_period_us = single_pulse_us * 8;  // 8 pulse sequences
             uint32_t total_period_us = 1000000 / freq_hz;
             uint32_t pause_us = (total_period_us > active_period_us) ? 
                                (total_period_us - active_period_us) : 0;
@@ -282,15 +311,12 @@ static void state_timer_handler(nrf_timer_event_t event_type, void * p_context)
         
         case STATE_PAUSE: {
             nrfx_timer_enable(&timer_pulse);
-            current_state = STATE_ACTIVE;
-            
-            uint32_t pulse_us = ble_get_pulse_width_ms() * 100;
-            uint32_t active_us = pulse_us * 2 + 100;
+            current_state = STATE_PULSE_1;
             
             nrfx_timer_disable(&timer_state);
             nrfx_timer_clear(&timer_state);
-            uint32_t active_ticks = nrfx_timer_us_to_ticks(&timer_state, active_us);
-            nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL0, active_ticks, true);
+            uint32_t pulse_ticks = nrfx_timer_us_to_ticks(&timer_state, single_pulse_us);
+            nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL0, pulse_ticks, true);
             nrfx_timer_enable(&timer_state);
             break;
         }
@@ -422,8 +448,8 @@ int main(void)
     setup_pulse_timer(pulse_us);
     setup_gppi_connections();
 
-    current_state = STATE_ACTIVE;
-    uint32_t active_us = pulse_us * 2 + 100;
+    current_state = STATE_PULSE_1;
+    uint32_t active_us = pulse_us * 2 + 100;  // First pulse duration
     uint32_t active_ticks = nrfx_timer_us_to_ticks(&timer_state, active_us);
     
     nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL0, active_ticks, true);
