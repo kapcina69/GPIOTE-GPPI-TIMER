@@ -1,0 +1,23 @@
+# Build directory
+build/
+
+# VS Code
+.vscode/
+
+# Generated files
+*.o
+*.d
+*.elf
+*.hex
+*.bin
+*.map
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+
+# Zephyr specific
+zephyr/
+.cache/
