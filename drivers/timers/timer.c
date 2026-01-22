@@ -14,7 +14,7 @@
 #include "timer.h"
 #include "../../config.h"
 #include "../../services/ble.h"
-#include "../../mux.h"
+#include "../mux/mux.h"
 #include <nrfx_example.h>
 #include <zephyr/kernel.h>
 
