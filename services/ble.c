@@ -4,6 +4,7 @@
  */
 
 #include "ble.h"
+#include "../config.h"
 #include <zephyr/kernel.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/hci.h>
@@ -50,8 +51,13 @@ static const struct bt_data sd[] = {
 
 /**
  * @brief Calculate maximum allowed frequency based on pulse width
- * max_freq = 1000000 / ((pulse_width * 200 + 100) * 8)
- * This ensures PAUSE is always >= 0
+ * @param pulse_width Pulse width in units of 100µs
+ * @return Maximum frequency in Hz that ensures PAUSE >= 0
+ * 
+ * Uses formula from config.h: max_freq = 1,000,000µs / ACTIVE_TIME
+ * where ACTIVE_TIME = [(pulse_width * 100) * 2 + 100] * 8 pulses
+ * 
+ * This ensures the total period is always >= active time, so pause time is non-negative.
  */
 static uint32_t get_max_frequency(uint32_t pulse_width)
 {
@@ -59,22 +65,32 @@ static uint32_t get_max_frequency(uint32_t pulse_width)
         pulse_width = 1;
     }
     
-    uint32_t active_one_pulse_us = pulse_width * 200 + 100;
-    uint32_t active_total_us = active_one_pulse_us * 8;  // 8 sequential pulses
+    uint32_t active_time_us = CALCULATE_ACTIVE_TIME_US(pulse_width);
     
-    if (active_total_us >= 1000000) {
-        return 1;  // Minimum 1Hz
+    if (active_time_us >= 1000000) {
+        return 1;  // Minimum 1Hz (period = 1 second)
     }
     
-    uint32_t max_freq = 1000000 / active_total_us;
+    uint32_t max_freq = 1000000 / active_time_us;
     return max_freq;
 }
 
 /**
  * @brief Calculate pause time from frequency
- * PAUSE = total_period - ACTIVE_duration
- * ACTIVE_duration = (pulse_us * 2 + 100 us overhead) * 8 pulses
- * Koristi preciznu kalkulaciju u µs da izbegne greške zaokruživanja
+ * @param freq_hz Desired frequency in Hz
+ * @return Pause time in milliseconds
+ * 
+ * Formula: PAUSE = TOTAL_PERIOD - ACTIVE_TIME
+ * where:
+ *   - TOTAL_PERIOD = 1,000,000µs / freq_hz
+ *   - ACTIVE_TIME = [(pulse_width * 100) * 2 + 100] * 8 pulses
+ * 
+ * Uses precise microsecond calculation to avoid rounding errors.
+ * 
+ * Example: freq=10Hz, pulse_width=5 (500µs)
+ *   - TOTAL_PERIOD = 1,000,000 / 10 = 100,000µs = 100ms
+ *   - ACTIVE_TIME = [(5*100)*2+100]*8 = 8,800µs = 8.8ms
+ *   - PAUSE = 100ms - 8.8ms = 91.2ms ≈ 91ms
  */
 static uint32_t frequency_to_pause_ms(uint32_t freq_hz)
 {
@@ -82,31 +98,27 @@ static uint32_t frequency_to_pause_ms(uint32_t freq_hz)
         freq_hz = 1;
     }
     
-    // Ograniči frekvenciju na maximum dozvoljenu za dati pulse_width
+    // Limit frequency to maximum allowed for current pulse_width
     uint32_t max_allowed_freq = get_max_frequency(current_pulse_width);
     if (freq_hz > max_allowed_freq) {
         freq_hz = max_allowed_freq;
-        NRFX_LOG_WARNING("Frequency limited to %u Hz (max for pulse_width=%u)", freq_hz, current_pulse_width);
+        NRFX_LOG_WARNING("Frequency limited to %u Hz (max for pulse_width=%u)", 
+                        freq_hz, current_pulse_width);
     }
     
-    // Ukupan period u µs (za preciznost)
+    // Total period in microseconds (for precision)
     uint32_t total_period_us = 1000000 / freq_hz;
     
-    // ACTIVE period u µs za JEDNU pulse sekvencu
-    // pulse_width je u jedinicama od 100us, pa je pulse_us = pulse_width * 100
-    // ACTIVE = pulse_width * 100 * 2 + 100 = pulse_width * 200 + 100 (u us)
-    // SA 8 PULSE SEKVENCI: ACTIVE_TOTAL = ACTIVE_one * 8
-    uint32_t active_one_pulse_us = current_pulse_width * 200 + 100;
-    uint32_t active_period_us = active_one_pulse_us * 8;  // 8 sequential pulses
+    // Active period for 8 sequential pulses
+    uint32_t active_period_us = CALCULATE_ACTIVE_TIME_US(current_pulse_width);
     
-    // PAUSE = total - ACTIVE (u µs, pa konvertuj u ms)
+    // PAUSE = total - active (in µs, then convert to ms)
     if (total_period_us > active_period_us) {
         uint32_t pause_us = total_period_us - active_period_us;
-        uint32_t pause_ms = pause_us / 1000;  // Precizna konverzija bez round up
+        uint32_t pause_ms = pause_us / 1000;  // Precise conversion without rounding up
         return pause_ms;
     } else {
-        // Ako je ACTIVE duže od željenog perioda, vrati 0 (bez pauze)
-        // printk("[BLE_CALC] WARNING: ACTIVE period >= total period! Setting PAUSE=0\n");
+        // If active period >= total period, return 0 (no pause)
         return 0;
     }
 }

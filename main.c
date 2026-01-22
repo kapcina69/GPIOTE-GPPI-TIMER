@@ -8,45 +8,17 @@
  * This ensures MUX pattern arrives BEFORE the pulse starts!
  */
 
-#define SPIM_INST_IDX 2
-
 #include <nrfx_example.h>
 #include <helpers/nrfx_gppi.h>
 #include <nrfx_timer.h>
 #include <nrfx_gpiote.h>
 #include <nrfx_saadc.h>
 #include <hal/nrf_saadc.h>
+#include "config.h"
 #include "ble.h"
 #include "mux.h"
 
-#define NRFX_LOG_MODULE                 EXAMPLE
-#define NRFX_EXAMPLE_CONFIG_LOG_ENABLED 1
-#define NRFX_EXAMPLE_CONFIG_LOG_LEVEL   3
 #include <nrfx_log.h>
-
-// Timer instances
-#define TIMER_PULSE_IDX 1
-#define TIMER_STATE_IDX 2
-#define GPIOTE_INST_IDX 0
-
-// GPIO pins
-#define OUTPUT_PIN_1 LED1_PIN
-#define OUTPUT_PIN_2 LED2_PIN
-
-// SAADC config
-#define SAADC_CHANNEL_AIN NRF_SAADC_INPUT_AIN0
-#define SAADC_RESOLUTION NRF_SAADC_RESOLUTION_10BIT
-
-// CRITICAL: ADC interrupt batching
-#define ADC_INTERRUPT_BATCH_SIZE 8
-#define LOG_EVERY_N_SAMPLES 100
-
-// Enable/disable features for power testing
-#define ENABLE_STATS_TIMER 0
-#define ENABLE_ADC_LOGGING 1
-
-// MUX pre-load timing (microseconds before state transition)
-#define MUX_ADVANCE_TIME_US 50
 
 // Timer instances
 static nrfx_timer_t timer_pulse = NRFX_TIMER_INSTANCE(TIMER_PULSE_IDX);
@@ -72,8 +44,14 @@ static volatile uint32_t sample_counter = 0;
 
 // MUX patterns for 8 pulses (one pattern per pulse)
 static const uint16_t mux_patterns[8] = {
-    0x0101, 0x0202, 0x0404, 0x0808,
-    0x1010, 0x2020, 0x4040, 0x8080
+    MUX_PATTERN_PULSE_1,
+    MUX_PATTERN_PULSE_2,
+    MUX_PATTERN_PULSE_3,
+    MUX_PATTERN_PULSE_4,
+    MUX_PATTERN_PULSE_5,
+    MUX_PATTERN_PULSE_6,
+    MUX_PATTERN_PULSE_7,
+    MUX_PATTERN_PULSE_8
 };
 
 #if ENABLE_STATS_TIMER
@@ -250,7 +228,7 @@ static void state_timer_handler(nrf_timer_event_t event_type, void * p_context)
                 mux_write(mux_patterns[7]);  // Pre-load for PULSE_8
                 break;
             case STATE_PULSE_8:
-                mux_write(0x0000);  // Pre-load for PAUSE (all off)
+                mux_write(MUX_PATTERN_PAUSE);  // Pre-load for PAUSE (all off)
                 break;
             case STATE_PAUSE:
                 mux_write(mux_patterns[0]);  // Pre-load for PULSE_1 (restart)
