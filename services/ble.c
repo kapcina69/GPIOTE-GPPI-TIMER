@@ -147,6 +147,21 @@ static void ble_process_command(const char *data, uint16_t len)
         printk("[BLE_CMD] Received SF;%d\n", freq);
         
         if (freq >= MIN_FREQUENCY_HZ && freq <= MAX_FREQUENCY_HZ) {
+            // Check if frequency is physically achievable with current pulse width
+            uint32_t max_freq = get_max_frequency(current_pulse_width);
+            
+            if (freq > max_freq) {
+                printk("[BLE_CMD] ERROR: Frequency %d Hz too high for pulse width %d (%d µs each)\n",
+                       freq, current_pulse_width, current_pulse_width * 100);
+                printk("[BLE_CMD] Maximum achievable frequency: %d Hz\n", max_freq);
+                printk("[BLE_CMD] Active time: %d µs (8 pulses * %d µs)\n",
+                       CALCULATE_ACTIVE_TIME_US(current_pulse_width),
+                       (current_pulse_width * 100 * 2 + 100));
+                NRFX_LOG_WARNING("Frequency %d Hz exceeds maximum %d Hz for pulse width %d",
+                                freq, max_freq, current_pulse_width);
+                return;
+            }
+            
             current_frequency_hz = freq;
             parameters_updated = true;
             printk("[BLE_CMD] Frequency set to %d Hz (pause will be: %d ms)\n", 
@@ -165,11 +180,29 @@ static void ble_process_command(const char *data, uint16_t len)
         int width = atoi(&cmd_buffer[3]);
         
         if (width >= MIN_PULSE_WIDTH && width <= MAX_PULSE_WIDTH) {
+            // Check if current frequency is still achievable with new pulse width
+            uint32_t max_freq_new = get_max_frequency(width);
+            
+            if (current_frequency_hz > max_freq_new) {
+                printk("[BLE_CMD] WARNING: Pulse width %d (%d µs) reduces max frequency\n",
+                       width, width * 100);
+                printk("[BLE_CMD] Current frequency %d Hz exceeds new maximum %d Hz\n",
+                       current_frequency_hz, max_freq_new);
+                printk("[BLE_CMD] Auto-adjusting frequency to %d Hz\n", max_freq_new);
+                NRFX_LOG_WARNING("Pulse width change: frequency reduced from %d to %d Hz",
+                                current_frequency_hz, max_freq_new);
+                current_frequency_hz = max_freq_new;
+            }
+            
             current_pulse_width = width;
             parameters_updated = true;
-            NRFX_LOG_INFO("Pulse width set to %d (%d ms)", 
-                         width, width * 100);
+            printk("[BLE_CMD] Pulse width set to %d (%d µs), max frequency: %d Hz\n",
+                   width, width * 100, max_freq_new);
+            NRFX_LOG_INFO("Pulse width set to %d (%d µs), max freq: %d Hz", 
+                         width, width * 100, max_freq_new);
         } else {
+            printk("[BLE_CMD] Pulse width %d out of range [%d-%d]\n",
+                   width, MIN_PULSE_WIDTH, MAX_PULSE_WIDTH);
             NRFX_LOG_WARNING("Pulse width %d out of range [%d-%d]", 
                             width, MIN_PULSE_WIDTH, MAX_PULSE_WIDTH);
         }
