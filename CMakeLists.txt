@@ -14,14 +14,19 @@ find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(NON_BLOCKING)
 target_sources(app PRIVATE 
     main.c 
-    mux.c 
     services/ble.c
+    drivers/mux/mux.c
     drivers/timers/timer.c
     drivers/gppi/gppi.c
+    drivers/gpiote/gpiote.c
+    drivers/saadc/saadc.c
 )
 target_include_directories(app PRIVATE 
     ../../../common 
     ${CMAKE_CURRENT_SOURCE_DIR}/services
+    ${CMAKE_CURRENT_SOURCE_DIR}/drivers/mux
     ${CMAKE_CURRENT_SOURCE_DIR}/drivers/timers
     ${CMAKE_CURRENT_SOURCE_DIR}/drivers/gppi
+    ${CMAKE_CURRENT_SOURCE_DIR}/drivers/gpiote
+    ${CMAKE_CURRENT_SOURCE_DIR}/drivers/saadc
 )

@@ -11,27 +11,19 @@
 #include <nrfx_example.h>
 #include <helpers/nrfx_gppi.h>
 #include <nrfx_timer.h>
-#include <nrfx_gpiote.h>
-#include <nrfx_saadc.h>
-#include <hal/nrf_saadc.h>
 #include "config.h"
 #include "services/ble.h"
-#include "mux.h"
+#include "drivers/mux/mux.h"
 #include "drivers/timers/timer.h"
 #include "drivers/gppi/gppi.h"
+#include "drivers/gpiote/gpiote.h"
+#include "drivers/saadc/saadc.h"
 
 #include <nrfx_log.h>
-
-static nrfx_gpiote_t const *p_gpiote_inst = NULL;
 
 // GPIOTE channels
 static uint8_t gpiote_ch_pin1;
 static uint8_t gpiote_ch_pin2;
-
-// ADC variables
-static int16_t m_saadc_buffer[ADC_INTERRUPT_BATCH_SIZE];
-static int16_t m_saadc_latest_sample;
-static volatile uint32_t sample_counter = 0;
 
 #if ENABLE_STATS_TIMER
 static void stats_timer_callback(struct k_timer *timer);
@@ -39,71 +31,17 @@ K_TIMER_DEFINE(stats_timer, stats_timer_callback, NULL);
 static uint32_t last_sample_count = 0;
 #endif
 
-static const nrfx_saadc_channel_t m_saadc_channel = {
-    .channel_config = {
-        .resistor_p = NRF_SAADC_RESISTOR_DISABLED,
-        .resistor_n = NRF_SAADC_RESISTOR_DISABLED,
-        .gain       = NRF_SAADC_GAIN1_6,
-        .reference  = NRF_SAADC_REFERENCE_INTERNAL,
-        .acq_time   = NRF_SAADC_ACQTIME_10US,
-        .mode       = NRF_SAADC_MODE_SINGLE_ENDED,
-        .burst      = NRF_SAADC_BURST_DISABLED,
-    },
-    .pin_p = SAADC_CHANNEL_AIN,
-    .pin_n = NRF_SAADC_INPUT_DISABLED,
-    .channel_index = 0,
-};
-
-static inline int32_t saadc_sample_to_mv(int16_t sample)
-{
-    return ((int32_t)sample * 3600) / 1024;
-}
-
-static void saadc_handler(nrfx_saadc_evt_t const * p_event)
-{
-    switch (p_event->type)
-    {
-        case NRFX_SAADC_EVT_BUF_REQ:
-            nrfx_saadc_buffer_set(m_saadc_buffer, ADC_INTERRUPT_BATCH_SIZE);
-            break;
-
-        case NRFX_SAADC_EVT_DONE:
-            m_saadc_latest_sample = NRFX_SAADC_SAMPLE_GET(
-                SAADC_RESOLUTION, 
-                p_event->data.done.p_buffer, 
-                ADC_INTERRUPT_BATCH_SIZE - 1
-            );
-            
-            sample_counter += ADC_INTERRUPT_BATCH_SIZE;
-            
-#if ENABLE_ADC_LOGGING
-            if (sample_counter % LOG_EVERY_N_SAMPLES == 0) {
-                int32_t voltage_mv = saadc_sample_to_mv(m_saadc_latest_sample);
-                printk("[ADC] #%u: %d mV\n", sample_counter, voltage_mv);
-            }
-#endif
-            break;
-
-        case NRFX_SAADC_EVT_FINISHED:
-            nrfx_saadc_buffer_set(m_saadc_buffer, ADC_INTERRUPT_BATCH_SIZE);
-            nrfx_saadc_mode_trigger();
-            break;
-
-        default:
-            break;
-    }
-}
-
 #if ENABLE_STATS_TIMER
 static void stats_timer_callback(struct k_timer *timer)
 {
-    uint32_t samples_since_last = sample_counter - last_sample_count;
+    uint32_t current_count = saadc_get_sample_count();
+    uint32_t samples_since_last = current_count - last_sample_count;
     uint32_t transitions = timer_get_transition_count();
     printk("[STATS] Samples: %u (+%u/s), Trans: %u\n",
-           sample_counter,
+           current_count,
            samples_since_last,
            transitions);
-    last_sample_count = sample_counter;
+    last_sample_count = current_count;
 }
 #endif
 
@@ -118,12 +56,6 @@ int main(void)
                 NRFX_TIMER_INST_HANDLER_GET(TIMER_PULSE_IDX), 0, 0);
     IRQ_CONNECT(NRFX_IRQ_NUMBER_GET(NRF_TIMER_INST_GET(TIMER_STATE_IDX)), IRQ_PRIO_LOWEST,
                 NRFX_TIMER_INST_HANDLER_GET(TIMER_STATE_IDX), 0, 0);
-    IRQ_CONNECT(NRFX_IRQ_NUMBER_GET(NRF_GPIOTE_INST_GET(GPIOTE_INST_IDX)), IRQ_PRIO_LOWEST,
-                NRFX_GPIOTE_INST_HANDLER_GET(GPIOTE_INST_IDX), 0, 0);
-    IRQ_CONNECT(NRFX_IRQ_NUMBER_GET(NRF_SAADC), IRQ_PRIO_LOWEST, 
-                nrfx_saadc_irq_handler, 0, 0);
-    IRQ_CONNECT(NRFX_IRQ_NUMBER_GET(NRF_SPIM_INST_GET(SPIM_INST_IDX)), IRQ_PRIO_LOWEST,
-                NRFX_SPIM_INST_HANDLER_GET(SPIM_INST_IDX), 0, 0);
 #endif
 
     NRFX_EXAMPLE_LOG_INIT();
@@ -131,70 +63,14 @@ int main(void)
     NRFX_LOG_INFO("MUX advance time: %d us", MUX_ADVANCE_TIME_US);
 
     // ========== SAADC INIT ==========
-    status = nrfx_saadc_init(NRFX_SAADC_DEFAULT_CONFIG_IRQ_PRIORITY);
+    status = saadc_init();
     NRFX_ASSERT(status == NRFX_SUCCESS);
-
-    status = nrfx_saadc_channel_config(&m_saadc_channel);
-    NRFX_ASSERT(status == NRFX_SUCCESS);
-
-    uint32_t channels_mask = nrfx_saadc_channels_configured_get();
-    status = nrfx_saadc_advanced_mode_set(channels_mask,
-                                           SAADC_RESOLUTION,
-                                           &(nrfx_saadc_adv_config_t){
-                                               .oversampling = NRF_SAADC_OVERSAMPLE_DISABLED,
-                                               .burst = NRF_SAADC_BURST_DISABLED,
-                                               .internal_timer_cc = 0,
-                                               .start_on_end = true,
-                                           },
-                                           saadc_handler);
-    NRFX_ASSERT(status == NRFX_SUCCESS);
-
-    status = nrfx_saadc_buffer_set(m_saadc_buffer, ADC_INTERRUPT_BATCH_SIZE);
-    NRFX_ASSERT(status == NRFX_SUCCESS);
-    
-    nrf_saadc_enable(NRF_SAADC);
-    status = nrfx_saadc_mode_trigger();
-    NRFX_ASSERT(status == NRFX_SUCCESS);
+    printk("SAADC initialized\n");
 
     // ========== GPIOTE INIT ==========
-    nrfx_gpiote_t const gpiote_inst = NRFX_GPIOTE_INSTANCE(GPIOTE_INST_IDX);
-    p_gpiote_inst = &gpiote_inst;
-    
-    status = nrfx_gpiote_init(&gpiote_inst, NRFX_GPIOTE_DEFAULT_CONFIG_IRQ_PRIORITY);
+    status = gpiote_init(&gpiote_ch_pin1, &gpiote_ch_pin2);
     NRFX_ASSERT(status == NRFX_SUCCESS);
-
-    status = nrfx_gpiote_channel_alloc(&gpiote_inst, &gpiote_ch_pin1);
-    NRFX_ASSERT(status == NRFX_SUCCESS);
-    status = nrfx_gpiote_channel_alloc(&gpiote_inst, &gpiote_ch_pin2);
-    NRFX_ASSERT(status == NRFX_SUCCESS);
-
-    static const nrfx_gpiote_output_config_t output_config = {
-        .drive = NRF_GPIO_PIN_S0S1,
-        .input_connect = NRF_GPIO_PIN_INPUT_DISCONNECT,
-        .pull = NRF_GPIO_PIN_NOPULL,
-    };
-
-    const nrfx_gpiote_task_config_t task_config_pin1 = {
-        .task_ch = gpiote_ch_pin1,
-        .polarity = NRF_GPIOTE_POLARITY_LOTOHI,
-        .init_val = NRF_GPIOTE_INITIAL_VALUE_HIGH,
-    };
-
-    status = nrfx_gpiote_output_configure(&gpiote_inst, OUTPUT_PIN_1,
-                                          &output_config, &task_config_pin1);
-    NRFX_ASSERT(status == NRFX_SUCCESS);
-    nrfx_gpiote_out_task_enable(&gpiote_inst, OUTPUT_PIN_1);
-
-    const nrfx_gpiote_task_config_t task_config_pin2 = {
-        .task_ch = gpiote_ch_pin2,
-        .polarity = NRF_GPIOTE_POLARITY_LOTOHI,
-        .init_val = NRF_GPIOTE_INITIAL_VALUE_HIGH,
-    };
-
-    status = nrfx_gpiote_output_configure(&gpiote_inst, OUTPUT_PIN_2,
-                                          &output_config, &task_config_pin2);
-    NRFX_ASSERT(status == NRFX_SUCCESS);
-    nrfx_gpiote_out_task_enable(&gpiote_inst, OUTPUT_PIN_2);
+    printk("GPIOTE initialized\n");
 
     // ========== GPPI INIT ==========
     status = gppi_init();
