@@ -8,10 +8,9 @@ endif()
 set(COMMON_PATH ${CMAKE_CURRENT_LIST_DIR}/../../../common)
 include(${COMMON_PATH}/common.cmake)
 
-GET_DEVICE_CONFIG_FILES(${BOARD} ../boards)
-
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(NON_BLOCKING)
+GET_DEVICE_CONFIG_FILES(${BOARD} ../boards)
 target_sources(app PRIVATE 
     main.c 
     services/ble.c
