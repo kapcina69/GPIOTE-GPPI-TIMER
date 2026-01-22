@@ -55,10 +55,34 @@
  */
 
 /** 
- * @brief SAADC input channel selection
+ * @brief SAADC input channel 0 selection
  * @note Use NRF_SAADC_INPUT_AIN0 through NRF_SAADC_INPUT_AIN7 for available inputs
  */
-#define SAADC_CHANNEL_AIN NRF_SAADC_INPUT_AIN0
+#define SAADC_CHANNEL0_AIN NRF_SAADC_INPUT_AIN0
+
+/**
+ * @brief Enable second ADC channel
+ * @note Set to 1 to enable dual-channel sampling, 0 for single channel only
+ */
+#define SAADC_DUAL_CHANNEL_ENABLED 0
+
+#if SAADC_DUAL_CHANNEL_ENABLED
+/** 
+ * @brief SAADC input channel 1 selection
+ * @note Second ADC channel samples in parallel with channel 0
+ */
+#define SAADC_CHANNEL1_AIN NRF_SAADC_INPUT_AIN3
+
+/**
+ * @brief Number of ADC channels
+ */
+#define SAADC_CHANNEL_COUNT 2
+#else
+/**
+ * @brief Number of ADC channels
+ */
+#define SAADC_CHANNEL_COUNT 1
+#endif
 
 /** 
  * @brief ADC resolution (8, 10, 12, or 14 bits)

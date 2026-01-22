@@ -23,11 +23,20 @@
 nrfx_err_t saadc_init(void);
 
 /**
- * @brief Get the latest SAADC sample value
+ * @brief Get the latest SAADC sample value from channel 0
  * 
- * @return Latest ADC sample (raw value)
+ * @return Latest ADC sample from CH0 (raw value)
  */
 int16_t saadc_get_latest_sample(void);
+
+#if SAADC_DUAL_CHANNEL_ENABLED
+/**
+ * @brief Get the latest SAADC sample value from channel 1
+ * 
+ * @return Latest ADC sample from CH1 (raw value)
+ */
+int16_t saadc_get_latest_sample_ch1(void);
+#endif
 
 /**
  * @brief Get total number of samples captured

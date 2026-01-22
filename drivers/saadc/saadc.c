@@ -15,11 +15,15 @@
 #define NRFX_LOG_MODULE SAADC
 #include <nrfx_log.h>
 
-static int16_t m_saadc_buffer[ADC_INTERRUPT_BATCH_SIZE];
-static int16_t m_saadc_latest_sample = 0;
+// Buffer size = batch size * channel count (interleaved: [CH0, CH1, CH0, CH1, ...])
+static int16_t m_saadc_buffer[ADC_INTERRUPT_BATCH_SIZE * SAADC_CHANNEL_COUNT];
+static int16_t m_saadc_latest_sample_ch0 = 0;
+#if SAADC_DUAL_CHANNEL_ENABLED
+static int16_t m_saadc_latest_sample_ch1 = 0;
+#endif
 static volatile uint32_t sample_counter = 0;
 
-static const nrfx_saadc_channel_t m_saadc_channel = {
+static const nrfx_saadc_channel_t m_saadc_channel0 = {
     .channel_config = {
         .resistor_p = NRF_SAADC_RESISTOR_DISABLED,
         .resistor_n = NRF_SAADC_RESISTOR_DISABLED,
@@ -29,10 +33,27 @@ static const nrfx_saadc_channel_t m_saadc_channel = {
         .mode       = NRF_SAADC_MODE_SINGLE_ENDED,
         .burst      = NRF_SAADC_BURST_DISABLED,
     },
-    .pin_p = SAADC_CHANNEL_AIN,
+    .pin_p = SAADC_CHANNEL0_AIN,
     .pin_n = NRF_SAADC_INPUT_DISABLED,
     .channel_index = 0,
 };
+
+#if SAADC_DUAL_CHANNEL_ENABLED
+static const nrfx_saadc_channel_t m_saadc_channel1 = {
+    .channel_config = {
+        .resistor_p = NRF_SAADC_RESISTOR_DISABLED,
+        .resistor_n = NRF_SAADC_RESISTOR_DISABLED,
+        .gain       = NRF_SAADC_GAIN1_6,
+        .reference  = NRF_SAADC_REFERENCE_INTERNAL,
+        .acq_time   = NRF_SAADC_ACQTIME_10US,
+        .mode       = NRF_SAADC_MODE_SINGLE_ENDED,
+        .burst      = NRF_SAADC_BURST_DISABLED,
+    },
+    .pin_p = SAADC_CHANNEL1_AIN,
+    .pin_n = NRF_SAADC_INPUT_DISABLED,
+    .channel_index = 1,
+};
+#endif
 
 int32_t saadc_sample_to_mv(int16_t sample)
 {
@@ -44,28 +65,50 @@ static void saadc_handler(nrfx_saadc_evt_t const * p_event)
     switch (p_event->type)
     {
         case NRFX_SAADC_EVT_BUF_REQ:
-            nrfx_saadc_buffer_set(m_saadc_buffer, ADC_INTERRUPT_BATCH_SIZE);
+            nrfx_saadc_buffer_set(m_saadc_buffer, ADC_INTERRUPT_BATCH_SIZE * SAADC_CHANNEL_COUNT);
             break;
 
         case NRFX_SAADC_EVT_DONE:
-            m_saadc_latest_sample = NRFX_SAADC_SAMPLE_GET(
+#if SAADC_DUAL_CHANNEL_ENABLED
+            // Buffer is interleaved: [CH0, CH1, CH0, CH1, ...]
+            // Get last sample from each channel
+            uint16_t total_samples = ADC_INTERRUPT_BATCH_SIZE * SAADC_CHANNEL_COUNT;
+            m_saadc_latest_sample_ch0 = NRFX_SAADC_SAMPLE_GET(
+                SAADC_RESOLUTION, 
+                p_event->data.done.p_buffer, 
+                total_samples - 2  // Second-to-last = CH0
+            );
+            m_saadc_latest_sample_ch1 = NRFX_SAADC_SAMPLE_GET(
+                SAADC_RESOLUTION, 
+                p_event->data.done.p_buffer, 
+                total_samples - 1  // Last = CH1
+            );
+#else
+            // Single channel mode
+            m_saadc_latest_sample_ch0 = NRFX_SAADC_SAMPLE_GET(
                 SAADC_RESOLUTION, 
                 p_event->data.done.p_buffer, 
                 ADC_INTERRUPT_BATCH_SIZE - 1
             );
+#endif
             
             sample_counter += ADC_INTERRUPT_BATCH_SIZE;
             
 #if ENABLE_ADC_LOGGING
             if (sample_counter % LOG_EVERY_N_SAMPLES == 0) {
-                int32_t voltage_mv = saadc_sample_to_mv(m_saadc_latest_sample);
-                printk("[ADC] #%u: %d mV\n", sample_counter, voltage_mv);
+                int32_t voltage_ch0 = saadc_sample_to_mv(m_saadc_latest_sample_ch0);
+#if SAADC_DUAL_CHANNEL_ENABLED
+                int32_t voltage_ch1 = saadc_sample_to_mv(m_saadc_latest_sample_ch1);
+                printk("[ADC] #%u: CH0=%d mV, CH1=%d mV\n", sample_counter, voltage_ch0, voltage_ch1);
+#else
+                printk("[ADC] #%u: %d mV\n", sample_counter, voltage_ch0);
+#endif
             }
 #endif
             break;
 
         case NRFX_SAADC_EVT_FINISHED:
-            nrfx_saadc_buffer_set(m_saadc_buffer, ADC_INTERRUPT_BATCH_SIZE);
+            nrfx_saadc_buffer_set(m_saadc_buffer, ADC_INTERRUPT_BATCH_SIZE * SAADC_CHANNEL_COUNT);
             nrfx_saadc_mode_trigger();
             break;
 
@@ -93,12 +136,21 @@ nrfx_err_t saadc_init(void)
         return status;
     }
 
-    // Configure channel
-    status = nrfx_saadc_channel_config(&m_saadc_channel);
+    // Configure channel 0
+    status = nrfx_saadc_channel_config(&m_saadc_channel0);
     if (status != NRFX_SUCCESS) {
-        NRFX_LOG_ERROR("SAADC channel config failed: 0x%08X", status);
+        NRFX_LOG_ERROR("SAADC channel 0 config failed: 0x%08X", status);
         return status;
     }
+
+#if SAADC_DUAL_CHANNEL_ENABLED
+    // Configure channel 1
+    status = nrfx_saadc_channel_config(&m_saadc_channel1);
+    if (status != NRFX_SUCCESS) {
+        NRFX_LOG_ERROR("SAADC channel 1 config failed: 0x%08X", status);
+        return status;
+    }
+#endif
 
     // Configure advanced mode
     uint32_t channels_mask = nrfx_saadc_channels_configured_get();
@@ -116,8 +168,8 @@ nrfx_err_t saadc_init(void)
         return status;
     }
 
-    // Set initial buffer
-    status = nrfx_saadc_buffer_set(m_saadc_buffer, ADC_INTERRUPT_BATCH_SIZE);
+    // Set initial buffer (size = batch * channels)
+    status = nrfx_saadc_buffer_set(m_saadc_buffer, ADC_INTERRUPT_BATCH_SIZE * SAADC_CHANNEL_COUNT);
     if (status != NRFX_SUCCESS) {
         NRFX_LOG_ERROR("SAADC buffer set failed: 0x%08X", status);
         return status;
@@ -137,8 +189,15 @@ nrfx_err_t saadc_init(void)
 
 int16_t saadc_get_latest_sample(void)
 {
-    return m_saadc_latest_sample;
+    return m_saadc_latest_sample_ch0;
 }
+
+#if SAADC_DUAL_CHANNEL_ENABLED
+int16_t saadc_get_latest_sample_ch1(void)
+{
+    return m_saadc_latest_sample_ch1;
+}
+#endif
 
 uint32_t saadc_get_sample_count(void)
 {
