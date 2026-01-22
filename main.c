@@ -18,18 +18,11 @@
 #include "services/ble.h"
 #include "mux.h"
 #include "drivers/timers/timer.h"
+#include "drivers/gppi/gppi.h"
 
 #include <nrfx_log.h>
 
 static nrfx_gpiote_t const *p_gpiote_inst = NULL;
-
-// GPPI channels
-static uint8_t gppi_pin1_set;
-static uint8_t gppi_pin1_clr;
-static uint8_t gppi_pin2_set;
-static uint8_t gppi_pin2_clr;
-static uint8_t gppi_adc_trigger;
-static uint8_t gppi_adc_capture;
 
 // GPIOTE channels
 static uint8_t gpiote_ch_pin1;
@@ -113,39 +106,6 @@ static void stats_timer_callback(struct k_timer *timer)
     last_sample_count = sample_counter;
 }
 #endif
-
-static void setup_gppi_connections(void)
-{
-    nrfx_timer_t *timer_pulse_ptr = NULL;
-    timer_get_instances(&timer_pulse_ptr, NULL);
-    
-    uint32_t pin1_set_addr = (uint32_t)&NRF_GPIOTE->TASKS_SET[gpiote_ch_pin1];
-    uint32_t pin1_clr_addr = (uint32_t)&NRF_GPIOTE->TASKS_CLR[gpiote_ch_pin1];
-    uint32_t pin2_set_addr = (uint32_t)&NRF_GPIOTE->TASKS_SET[gpiote_ch_pin2];
-    uint32_t pin2_clr_addr = (uint32_t)&NRF_GPIOTE->TASKS_CLR[gpiote_ch_pin2];
-    
-    uint32_t timer_cc0_event = nrfx_timer_compare_event_address_get(timer_pulse_ptr, NRF_TIMER_CC_CHANNEL0);
-    uint32_t timer_cc1_event = nrfx_timer_compare_event_address_get(timer_pulse_ptr, NRF_TIMER_CC_CHANNEL1);
-    uint32_t timer_cc2_event = nrfx_timer_compare_event_address_get(timer_pulse_ptr, NRF_TIMER_CC_CHANNEL2);
-    uint32_t timer_cc3_event = nrfx_timer_compare_event_address_get(timer_pulse_ptr, NRF_TIMER_CC_CHANNEL3);
-    
-    uint32_t saadc_sample_task = nrf_saadc_task_address_get(NRF_SAADC, NRF_SAADC_TASK_SAMPLE);
-    uint32_t saadc_end_event = nrf_saadc_event_address_get(NRF_SAADC, NRF_SAADC_EVENT_END);
-    uint32_t timer_capture_task = nrfx_timer_task_address_get(timer_pulse_ptr, NRF_TIMER_TASK_CAPTURE4);
-    
-    nrfx_gppi_channel_endpoints_setup(gppi_pin1_set, timer_cc0_event, pin1_clr_addr);
-    nrfx_gppi_channel_endpoints_setup(gppi_pin1_clr, timer_cc1_event, pin1_set_addr);
-    nrfx_gppi_channel_endpoints_setup(gppi_pin2_set, timer_cc2_event, pin2_clr_addr);
-    nrfx_gppi_channel_endpoints_setup(gppi_pin2_clr, timer_cc3_event, pin2_set_addr);
-    nrfx_gppi_channel_endpoints_setup(gppi_adc_trigger, timer_cc1_event, saadc_sample_task);
-    nrfx_gppi_channel_endpoints_setup(gppi_adc_capture, saadc_end_event, timer_capture_task);
-    
-    uint32_t channels_mask = BIT(gppi_pin1_set) | BIT(gppi_pin1_clr) |
-                             BIT(gppi_pin2_set) | BIT(gppi_pin2_clr) |
-                             BIT(gppi_adc_trigger) | BIT(gppi_adc_capture);
-    
-    nrfx_gppi_channels_enable(channels_mask);
-}
 
 int main(void)
 {
@@ -236,19 +196,10 @@ int main(void)
     NRFX_ASSERT(status == NRFX_SUCCESS);
     nrfx_gpiote_out_task_enable(&gpiote_inst, OUTPUT_PIN_2);
 
-    // ========== GPPI ALLOCATION ==========
-    status = nrfx_gppi_channel_alloc(&gppi_pin1_set);
+    // ========== GPPI INIT ==========
+    status = gppi_init();
     NRFX_ASSERT(status == NRFX_SUCCESS);
-    status = nrfx_gppi_channel_alloc(&gppi_pin1_clr);
-    NRFX_ASSERT(status == NRFX_SUCCESS);
-    status = nrfx_gppi_channel_alloc(&gppi_pin2_set);
-    NRFX_ASSERT(status == NRFX_SUCCESS);
-    status = nrfx_gppi_channel_alloc(&gppi_pin2_clr);
-    NRFX_ASSERT(status == NRFX_SUCCESS);
-    status = nrfx_gppi_channel_alloc(&gppi_adc_trigger);
-    NRFX_ASSERT(status == NRFX_SUCCESS);
-    status = nrfx_gppi_channel_alloc(&gppi_adc_capture);
-    NRFX_ASSERT(status == NRFX_SUCCESS);
+    printk("GPPI channels allocated\n");
 
     // ========== TIMER INIT ==========
     uint32_t pulse_us = ble_get_pulse_width_ms() * 100;
@@ -266,8 +217,11 @@ int main(void)
     }
     printk("MUX initialized OK\n");
 
-    // ========== SETUP ==========
-    setup_gppi_connections();
+    // ========== GPPI SETUP ==========
+    status = gppi_setup_connections(gpiote_ch_pin1, gpiote_ch_pin2);
+    NRFX_ASSERT(status == NRFX_SUCCESS);
+    gppi_enable();
+    printk("GPPI connections configured and enabled\n");
 
     // Initial MUX pattern for PULSE_1
     mux_write(MUX_PATTERN_PULSE_1);

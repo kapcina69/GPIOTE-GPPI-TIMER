@@ -17,9 +17,11 @@ target_sources(app PRIVATE
     mux.c 
     services/ble.c
     drivers/timers/timer.c
+    drivers/gppi/gppi.c
 )
 target_include_directories(app PRIVATE 
     ../../../common 
     ${CMAKE_CURRENT_SOURCE_DIR}/services
     ${CMAKE_CURRENT_SOURCE_DIR}/drivers/timers
+    ${CMAKE_CURRENT_SOURCE_DIR}/drivers/gppi
 )
