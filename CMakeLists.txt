@@ -12,5 +12,14 @@ GET_DEVICE_CONFIG_FILES(${BOARD} ../boards)
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(NON_BLOCKING)
-target_sources(app PRIVATE main.c mux.c services/ble.c)
-target_include_directories(app PRIVATE ../../../common ${CMAKE_CURRENT_SOURCE_DIR}/services)
+target_sources(app PRIVATE 
+    main.c 
+    mux.c 
+    services/ble.c
+    drivers/timers/timer.c
+)
+target_include_directories(app PRIVATE 
+    ../../../common 
+    ${CMAKE_CURRENT_SOURCE_DIR}/services
+    ${CMAKE_CURRENT_SOURCE_DIR}/drivers/timers
+)

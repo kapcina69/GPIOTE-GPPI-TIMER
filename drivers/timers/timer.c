@@ -1,0 +1,337 @@
+/**
+ * @file timer.c
+ * @brief Timer driver implementation for dual-timer pulse generation
+ * 
+ * ULTRA LOW POWER VERSION with DUAL CC CHANNEL MUX PRE-LOADING
+ * 
+ * State timer uses TWO compare channels:
+ * - CC_CHANNEL0: State transition event (main timing)
+ * - CC_CHANNEL1: MUX pre-load event (MUX_ADVANCE_TIME_US before state transition)
+ * 
+ * This ensures MUX pattern arrives BEFORE the pulse starts!
+ */
+
+#include "timer.h"
+#include "../../config.h"
+#include "../../services/ble.h"
+#include "../../mux.h"
+#include <nrfx_example.h>
+#include <zephyr/kernel.h>
+
+// Timer instances
+static nrfx_timer_t timer_pulse = NRFX_TIMER_INSTANCE(TIMER_PULSE_IDX);
+static nrfx_timer_t timer_state = NRFX_TIMER_INSTANCE(TIMER_STATE_IDX);
+
+// MUX patterns for 8 pulses (one pattern per pulse)
+static const uint16_t mux_patterns[8] = {
+    MUX_PATTERN_PULSE_1,
+    MUX_PATTERN_PULSE_2,
+    MUX_PATTERN_PULSE_3,
+    MUX_PATTERN_PULSE_4,
+    MUX_PATTERN_PULSE_5,
+    MUX_PATTERN_PULSE_6,
+    MUX_PATTERN_PULSE_7,
+    MUX_PATTERN_PULSE_8
+};
+
+// State machine
+typedef enum {
+    STATE_PULSE_1,
+    STATE_PULSE_2,
+    STATE_PULSE_3,
+    STATE_PULSE_4,
+    STATE_PULSE_5,
+    STATE_PULSE_6,
+    STATE_PULSE_7,
+    STATE_PULSE_8,
+    STATE_PAUSE
+} state_t;
+
+static volatile state_t current_state = STATE_PULSE_1;
+static volatile uint32_t state_transitions = 0;
+
+/**
+ * @brief State machine timer handler with DUAL CC channels
+ * 
+ * CC_CHANNEL0: State transition (main event)
+ * CC_CHANNEL1: MUX pre-load (early event, MUX_ADVANCE_TIME_US before CC0)
+ */
+static void state_timer_handler(nrf_timer_event_t event_type, void * p_context)
+{
+    uint32_t pulse_us = ble_get_pulse_width_ms() * 100;
+    uint32_t single_pulse_us = pulse_us * 2 + 100;
+    
+    // ========== CC_CHANNEL1: MUX PRE-LOAD EVENT ==========
+    if (event_type == NRF_TIMER_EVENT_COMPARE1) {
+        // Send MUX pattern for NEXT state (before state actually transitions)
+        switch(current_state) {
+            case STATE_PULSE_1:
+                mux_write(mux_patterns[1]);  // Pre-load for PULSE_2
+                break;
+            case STATE_PULSE_2:
+                mux_write(mux_patterns[2]);  // Pre-load for PULSE_3
+                break;
+            case STATE_PULSE_3:
+                mux_write(mux_patterns[3]);  // Pre-load for PULSE_4
+                break;
+            case STATE_PULSE_4:
+                mux_write(mux_patterns[4]);  // Pre-load for PULSE_5
+                break;
+            case STATE_PULSE_5:
+                mux_write(mux_patterns[5]);  // Pre-load for PULSE_6
+                break;
+            case STATE_PULSE_6:
+                mux_write(mux_patterns[6]);  // Pre-load for PULSE_7
+                break;
+            case STATE_PULSE_7:
+                mux_write(mux_patterns[7]);  // Pre-load for PULSE_8
+                break;
+            case STATE_PULSE_8:
+                mux_write(MUX_PATTERN_PAUSE);  // Pre-load for PAUSE (all off)
+                break;
+            case STATE_PAUSE:
+                mux_write(mux_patterns[0]);  // Pre-load for PULSE_1 (restart)
+                break;
+        }
+        return;  // Only send pattern, don't change state
+    }
+    
+    // ========== CC_CHANNEL0: STATE TRANSITION EVENT ==========
+    if (event_type != NRF_TIMER_EVENT_COMPARE0) {
+        return;
+    }
+    
+    state_transitions++;
+    
+    // Check BLE updates
+    if (ble_parameters_updated()) {
+        ble_clear_update_flag();
+        
+        uint32_t new_pulse_us = ble_get_pulse_width_ms() * 100;
+        
+        nrfx_timer_disable(&timer_pulse);
+        nrfx_timer_clear(&timer_pulse);
+        
+        uint32_t pulse_ticks = nrfx_timer_us_to_ticks(&timer_pulse, new_pulse_us);
+        nrfx_timer_compare(&timer_pulse, NRF_TIMER_CC_CHANNEL0, 10, false);
+        nrfx_timer_compare(&timer_pulse, NRF_TIMER_CC_CHANNEL1, pulse_ticks + 10, false);
+        nrfx_timer_compare(&timer_pulse, NRF_TIMER_CC_CHANNEL2, pulse_ticks + 20, false);
+        nrfx_timer_compare(&timer_pulse, NRF_TIMER_CC_CHANNEL3, pulse_ticks * 2 + 20, false);
+        nrfx_timer_extended_compare(&timer_pulse, NRF_TIMER_CC_CHANNEL5,
+                                    pulse_ticks * 2 + 30,
+                                    NRF_TIMER_SHORT_COMPARE5_CLEAR_MASK, false);
+        
+        if (current_state >= STATE_PULSE_1 && current_state <= STATE_PULSE_8) {
+            nrfx_timer_enable(&timer_pulse);
+        }
+    }
+    
+    // State transitions
+    switch(current_state) {
+        case STATE_PULSE_1:
+        case STATE_PULSE_2:
+        case STATE_PULSE_3:
+        case STATE_PULSE_4:
+        case STATE_PULSE_5:
+        case STATE_PULSE_6:
+        case STATE_PULSE_7: {
+            // Move to next pulse state
+            nrfx_timer_clear(&timer_pulse);
+            current_state = (state_t)(current_state + 1);
+            
+            nrfx_timer_disable(&timer_state);
+            nrfx_timer_clear(&timer_state);
+            uint32_t pulse_ticks = nrfx_timer_us_to_ticks(&timer_state, single_pulse_us);
+            
+            // Setup CC0 for state transition
+            nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL0, pulse_ticks, true);
+            
+            // Setup CC1 for MUX pre-load (ADVANCE_TIME before CC0)
+            uint32_t advance_ticks = nrfx_timer_us_to_ticks(&timer_state, MUX_ADVANCE_TIME_US);
+            uint32_t mux_ticks = (pulse_ticks > advance_ticks) ? 
+                                 (pulse_ticks - advance_ticks) : 
+                                 (pulse_ticks / 2);
+            nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL1, mux_ticks, true);
+            
+            nrfx_timer_enable(&timer_state);
+            break;
+        }
+        
+        case STATE_PULSE_8: {
+            // After 8th pulse, go to PAUSE
+            nrfx_timer_disable(&timer_pulse);
+            current_state = STATE_PAUSE;
+            
+            uint32_t freq_hz = ble_get_frequency_hz();
+            uint32_t active_period_us = single_pulse_us * 8;
+            uint32_t total_period_us = 1000000 / freq_hz;
+            uint32_t pause_us = (total_period_us > active_period_us) ? 
+                               (total_period_us - active_period_us) : 0;
+            
+            nrfx_timer_disable(&timer_state);
+            nrfx_timer_clear(&timer_state);
+            uint32_t pause_ticks = nrfx_timer_us_to_ticks(&timer_state, pause_us);
+            
+            // Setup CC0 for state transition
+            nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL0, pause_ticks, true);
+            
+            // Setup CC1 for MUX pre-load
+            uint32_t advance_ticks = nrfx_timer_us_to_ticks(&timer_state, MUX_ADVANCE_TIME_US);
+            uint32_t mux_ticks = (pause_ticks > advance_ticks) ? 
+                                 (pause_ticks - advance_ticks) : 
+                                 (pause_ticks / 2);
+            nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL1, mux_ticks, true);
+            
+            nrfx_timer_enable(&timer_state);
+            break;
+        }
+        
+        case STATE_PAUSE: {
+            // After PAUSE, back to PULSE_1
+            nrfx_timer_enable(&timer_pulse);
+            current_state = STATE_PULSE_1;
+            
+            nrfx_timer_disable(&timer_state);
+            nrfx_timer_clear(&timer_state);
+            uint32_t pulse_ticks = nrfx_timer_us_to_ticks(&timer_state, single_pulse_us);
+            
+            // Setup CC0 for state transition
+            nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL0, pulse_ticks, true);
+            
+            // Setup CC1 for MUX pre-load
+            uint32_t advance_ticks = nrfx_timer_us_to_ticks(&timer_state, MUX_ADVANCE_TIME_US);
+            uint32_t mux_ticks = (pulse_ticks > advance_ticks) ? 
+                                 (pulse_ticks - advance_ticks) : 
+                                 (pulse_ticks / 2);
+            nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL1, mux_ticks, true);
+            
+            nrfx_timer_enable(&timer_state);
+            break;
+        }
+    }
+}
+
+nrfx_err_t timer_init(uint32_t pulse_width_us)
+{
+    nrfx_err_t status;
+    
+    // ========== PULSE TIMER ==========
+    uint32_t base_freq_pulse = NRF_TIMER_BASE_FREQUENCY_GET(timer_pulse.p_reg);
+    nrfx_timer_config_t pulse_config = NRFX_TIMER_DEFAULT_CONFIG(base_freq_pulse);
+    pulse_config.bit_width = NRF_TIMER_BIT_WIDTH_32;
+
+    status = nrfx_timer_init(&timer_pulse, &pulse_config, NULL);
+    if (status != NRFX_SUCCESS) {
+        return status;
+    }
+    
+    // Configure pulse timer compare channels
+    nrfx_timer_disable(&timer_pulse);
+    nrfx_timer_clear(&timer_pulse);
+    
+    uint32_t pulse_ticks = nrfx_timer_us_to_ticks(&timer_pulse, pulse_width_us);
+    
+    nrfx_timer_compare(&timer_pulse, NRF_TIMER_CC_CHANNEL0, 10, false);
+    nrfx_timer_compare(&timer_pulse, NRF_TIMER_CC_CHANNEL1, pulse_ticks + 10, false);
+    nrfx_timer_compare(&timer_pulse, NRF_TIMER_CC_CHANNEL2, pulse_ticks + 20, false);
+    nrfx_timer_compare(&timer_pulse, NRF_TIMER_CC_CHANNEL3, pulse_ticks * 2 + 20, false);
+    nrfx_timer_extended_compare(&timer_pulse, NRF_TIMER_CC_CHANNEL5,
+                                pulse_ticks * 2 + 30,
+                                NRF_TIMER_SHORT_COMPARE5_CLEAR_MASK, false);
+    
+    nrfx_timer_enable(&timer_pulse);
+
+    // ========== STATE TIMER ==========
+    uint32_t base_freq_state = NRF_TIMER_BASE_FREQUENCY_GET(timer_state.p_reg);
+    nrfx_timer_config_t state_config = NRFX_TIMER_DEFAULT_CONFIG(base_freq_state);
+    state_config.bit_width = NRF_TIMER_BIT_WIDTH_32;
+
+    status = nrfx_timer_init(&timer_state, &state_config, state_timer_handler);
+    if (status != NRFX_SUCCESS) {
+        return status;
+    }
+    
+    return NRFX_SUCCESS;
+}
+
+void timer_update_pulse_width(uint32_t pulse_width_us)
+{
+    nrfx_timer_disable(&timer_pulse);
+    nrfx_timer_clear(&timer_pulse);
+    
+    uint32_t pulse_ticks = nrfx_timer_us_to_ticks(&timer_pulse, pulse_width_us);
+    
+    nrfx_timer_compare(&timer_pulse, NRF_TIMER_CC_CHANNEL0, 10, false);
+    nrfx_timer_compare(&timer_pulse, NRF_TIMER_CC_CHANNEL1, pulse_ticks + 10, false);
+    nrfx_timer_compare(&timer_pulse, NRF_TIMER_CC_CHANNEL2, pulse_ticks + 20, false);
+    nrfx_timer_compare(&timer_pulse, NRF_TIMER_CC_CHANNEL3, pulse_ticks * 2 + 20, false);
+    nrfx_timer_extended_compare(&timer_pulse, NRF_TIMER_CC_CHANNEL5,
+                                pulse_ticks * 2 + 30,
+                                NRF_TIMER_SHORT_COMPARE5_CLEAR_MASK, false);
+    
+    nrfx_timer_enable(&timer_pulse);
+}
+
+void timer_set_state_pulse(uint32_t single_pulse_us)
+{
+    nrfx_timer_disable(&timer_state);
+    nrfx_timer_clear(&timer_state);
+    
+    uint32_t pulse_ticks = nrfx_timer_us_to_ticks(&timer_state, single_pulse_us);
+    
+    // Setup CC0 for state transition
+    nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL0, pulse_ticks, true);
+    
+    // Setup CC1 for MUX pre-load (ADVANCE_TIME before CC0)
+    uint32_t advance_ticks = nrfx_timer_us_to_ticks(&timer_state, MUX_ADVANCE_TIME_US);
+    uint32_t mux_ticks = (pulse_ticks > advance_ticks) ? 
+                         (pulse_ticks - advance_ticks) : 
+                         (pulse_ticks / 2);
+    nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL1, mux_ticks, true);
+    
+    nrfx_timer_enable(&timer_state);
+}
+
+void timer_set_state_pause(uint32_t pause_us)
+{
+    nrfx_timer_disable(&timer_state);
+    nrfx_timer_clear(&timer_state);
+    
+    uint32_t pause_ticks = nrfx_timer_us_to_ticks(&timer_state, pause_us);
+    
+    // Setup CC0 for state transition
+    nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL0, pause_ticks, true);
+    
+    // Setup CC1 for MUX pre-load
+    uint32_t advance_ticks = nrfx_timer_us_to_ticks(&timer_state, MUX_ADVANCE_TIME_US);
+    uint32_t mux_ticks = (pause_ticks > advance_ticks) ? 
+                         (pause_ticks - advance_ticks) : 
+                         (pause_ticks / 2);
+    nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL1, mux_ticks, true);
+    
+    nrfx_timer_enable(&timer_state);
+}
+
+void timer_pulse_enable(bool enable)
+{
+    if (enable) {
+        nrfx_timer_enable(&timer_pulse);
+    } else {
+        nrfx_timer_disable(&timer_pulse);
+    }
+}
+
+void timer_get_instances(nrfx_timer_t **pulse, nrfx_timer_t **state)
+{
+    if (pulse) {
+        *pulse = &timer_pulse;
+    }
+    if (state) {
+        *state = &timer_state;
+    }
+}
+
+uint32_t timer_get_transition_count(void)
+{
+    return state_transitions;
+}
