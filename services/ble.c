@@ -5,6 +5,7 @@
 
 #include "ble.h"
 #include "../config.h"
+#include "../drivers/dac/dac.h"
 #include <zephyr/kernel.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/hci.h>
@@ -205,6 +206,20 @@ static void ble_process_command(const char *data, uint16_t len)
                    width, MIN_PULSE_WIDTH, MAX_PULSE_WIDTH);
             NRFX_LOG_WARNING("Pulse width %d out of range [%d-%d]", 
                             width, MIN_PULSE_WIDTH, MAX_PULSE_WIDTH);
+        }
+    }
+    // Proveri SA; komandu (Set Amplitude)
+    else if (strncmp(cmd_buffer, "SA;", 3) == 0) {
+        int amplitude = atoi(&cmd_buffer[3]);
+        
+        if (amplitude >= 1 && amplitude <= 30) {
+            uint16_t dac_value = (uint16_t)(amplitude * 8.5);
+            dac_set_value(dac_value);
+            printk("[BLE_CMD] Amplitude set to %d (DAC value: %u)\n", amplitude, dac_value);
+            NRFX_LOG_INFO("Amplitude set to %d (DAC: %u)", amplitude, dac_value);
+        } else {
+            printk("[BLE_CMD] Amplitude %d out of range [1-30]\n", amplitude);
+            NRFX_LOG_WARNING("Amplitude %d out of range [1-30]", amplitude);
         }
     }
     else {
