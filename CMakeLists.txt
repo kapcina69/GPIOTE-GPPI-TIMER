@@ -10,6 +10,7 @@ include(${COMMON_PATH}/common.cmake)
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(NON_BLOCKING)
+
 GET_DEVICE_CONFIG_FILES(${BOARD} ../boards)
 target_sources(app PRIVATE 
     main.c 
@@ -19,6 +20,8 @@ target_sources(app PRIVATE
     drivers/gppi/gppi.c
     drivers/gpiote/gpiote.c
     drivers/saadc/saadc.c
+    drivers/dac/dac.c
+    drivers/dac/dac_test.c
 )
 target_include_directories(app PRIVATE 
     ../../../common 
@@ -28,4 +31,5 @@ target_include_directories(app PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/drivers/gppi
     ${CMAKE_CURRENT_SOURCE_DIR}/drivers/gpiote
     ${CMAKE_CURRENT_SOURCE_DIR}/drivers/saadc
+    ${CMAKE_CURRENT_SOURCE_DIR}/drivers/dac
 )
