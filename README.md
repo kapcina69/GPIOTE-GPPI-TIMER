@@ -11,6 +11,7 @@ Advanced multi-channel pulse generation system with BLE remote control, hardware
 - Real-time BLE parameter control with physical limit validation
 - Synchronized ADC sampling on every pulse
 - 16-channel multiplexer control via SPI
+- DAC amplitude control (MCP4725) via I2C for analog output
 
 ## Architecture
 
@@ -24,8 +25,10 @@ main.c (137 lines - orchestration only)
 │   ├── gppi/ - Hardware event routing
 │   ├── gpiote/ - Task-controlled output pins
 │   ├── saadc/ - Hardware-triggered ADC
-│   └── mux/ - SPI multiplexer control
-└── config.h - Centralized configuration
+│   ├── mux/ - SPI multiplexer control
+│   └── dac/ - I2C DAC control (MCP4725)
+├── config.h - General project configuration
+└── drivers/*/.*_config.h - Driver-specific configurations
 ```
 
 ### Hardware Flow
@@ -73,6 +76,10 @@ Each driver is self-contained with README documentation:
 - **mux/** - SPI multiplexer
   - `mux.c/h` - ISR-safe non-blocking SPI control
   - 16-channel analog routing
+  
+- **dac/** - I2C DAC control
+  - `dac.c/h` - MCP4725 12-bit DAC driver
+  - Async I2C transfers with race condition protection
 
 ### Services (`services/`)
 - **ble.c/h** - Nordic UART Service
@@ -80,12 +87,19 @@ Each driver is self-contained with README documentation:
   - Physical limit validation
   - Auto-adjustment when parameters conflict
 
-### Configuration (`config.h`)
-Centralized configuration (264 lines):
-- Hardware indices and GPIO pins
-- Timing parameters and formulas
-- MUX patterns for 8 pulses
+### Configuration
+**Main Configuration (`config.h`):**
+- General pulse generation parameters
 - Feature flags (ADC logging, stats timer)
+- Logging configuration
+- Includes all driver-specific configs
+
+**Driver-Specific Configurations:**
+- `drivers/mux/mux_config.h` - SPIM instance, MUX patterns, advance timing
+- `drivers/saadc/saadc_config.h` - ADC channels, resolution, batch size
+- `drivers/timers/timer_config.h` - Timer instance assignments
+- `drivers/gpiote/gpiote_config.h` - GPIOTE instance and output pins
+- `drivers/dac/dac_config.h` - I2C instance, pins, DAC address
 
 ## Hardware Connections
 
@@ -100,6 +114,9 @@ LOOPBACK_PIN_1A → MOSI (SPI to MUX)
 LOOPBACK_PIN_2A → SCK  (SPI to MUX)
 
 AIN0 (P0.2) → Analog input for ADC sampling
+
+P0.26 (SDA) → MCP4725 DAC SDA (I2C)
+P0.27 (SCL) → MCP4725 DAC SCL (I2C)
 ```
 
 ### Optional Connections
@@ -140,6 +157,7 @@ SF;25    → Set frequency to 25 Hz
 SW;10    → Set pulse width to 1000 µs (10 × 100µs)
 SP;1     → Pause pulse generation
 SP;0     → Resume pulse generation
+SA;15    → Set DAC amplitude to 15 (range: 1-30, DAC value = amplitude × 8.5)
 ```
 
 ### Validation Example
@@ -188,15 +206,29 @@ BLE initialized successfully
 ### Enable/Disable Features (`config.h`)
 ```c
 #define ENABLE_STATS_TIMER 1     // Periodic statistics output
-#define ENABLE_ADC_LOGGING 1     // ADC value printing
-#define LOG_EVERY_N_SAMPLES 1024 // ADC logging interval
+#define ENABLE_ADC_LOGGING 1     // ADC value printing (in drivers/saadc/saadc_config.h)
+#define LOG_EVERY_N_SAMPLES 1024 // ADC logging interval (in drivers/saadc/saadc_config.h)
 ```
 
-### Adjust Timing
+### Adjust Driver-Specific Settings
+
+**MUX Configuration** (`drivers/mux/mux_config.h`):
 ```c
-#define MUX_ADVANCE_TIME_US 300  // MUX pre-load time (200-500µs)
-#define MIN_PULSE_WIDTH_MS 1     // 100µs
-#define MAX_PULSE_WIDTH_MS 100   // 10,000µs
+#define MUX_ADVANCE_TIME_US 50    // MUX pre-load time (10-1000µs)
+#define MUX_PATTERN_PULSE_1 0x0101 // Customize for your hardware
+```
+
+**SAADC Configuration** (`drivers/saadc/saadc_config.h`):
+```c
+#define SAADC_RESOLUTION NRF_SAADC_RESOLUTION_10BIT
+#define ADC_INTERRUPT_BATCH_SIZE 8
+```
+
+**DAC Configuration** (`drivers/dac/dac_config.h`):
+```c
+#define DAC_I2C_ADDR 0x60  // MCP4725 address (0x60 or 0x61)
+#define DAC_SDA_PIN 26
+#define DAC_SCL_PIN 27
 ```
 
 ## Troubleshooting
@@ -234,10 +266,12 @@ BLE initialized successfully
 4. Add README.md documenting the driver
 
 ### Modifying Parameters
-- Hardware configuration: Edit `config.h`
+- General configuration: Edit `config.h`
+- Driver-specific settings: Edit `drivers/<driver>/<driver>_config.h`
 - BLE commands: Edit `services/ble.c`
 - State machine: Edit `drivers/timers/timer.c`
-- MUX patterns: Edit `config.h` MUX_PATTERN_* defines
+- MUX patterns: Edit `drivers/mux/mux_config.h` MUX_PATTERN_* defines
+- DAC hardware: Edit `drivers/dac/dac_config.h`
 
 ## Documentation
 
@@ -247,6 +281,7 @@ Each module has detailed README:
 - [GPIOTE Driver](drivers/gpiote/README.md) - Task-controlled outputs
 - [SAADC Driver](drivers/saadc/README.md) - ADC sampling details
 - [MUX Driver](drivers/mux/README.md) - SPI multiplexer control
+- [DAC Driver](drivers/dac/README.md) - MCP4725 I2C DAC control
 - [BLE Service](services/README.md) - Command protocol and validation
 
 ## License
