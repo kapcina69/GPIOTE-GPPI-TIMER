@@ -2,8 +2,13 @@
  * @file config.h
  * @brief System Configuration File
  * 
- * This file contains all configurable parameters for the pulse generation system.
- * Modify these values to adjust system behavior without changing the main code.
+ * This file contains general project-wide configuration parameters.
+ * Driver-specific configurations are in their respective config files:
+ * - drivers/mux/mux_config.h - MUX driver configuration
+ * - drivers/saadc/saadc_config.h - ADC configuration
+ * - drivers/timers/timer_config.h - Timer configuration
+ * - drivers/gpiote/gpiote_config.h - GPIOTE configuration
+ * - drivers/dac/dac_config.h - DAC configuration
  * 
  * @note All timing values are carefully tuned for the nRF52833 running at 64MHz
  */
@@ -11,130 +16,12 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#include <nrfx_timer.h>
-#include <hal/nrf_saadc.h>
-
-/*==============================================================================
- * HARDWARE CONFIGURATION
- *============================================================================*/
-
-/**
- * @defgroup hw_config Hardware Peripheral Configuration
- * @brief Hardware resource allocation and pin assignments
- * @{
- */
-
-/** @brief SPIM instance index for MUX control */
-#define SPIM_INST_IDX 2
-
-/** @brief Timer instance for pulse generation (TIMER1) */
-#define TIMER_PULSE_IDX 1
-
-/** @brief Timer instance for state machine (TIMER2) */
-#define TIMER_STATE_IDX 2
-
-/** @brief GPIOTE instance index */
-#define GPIOTE_INST_IDX 0
-
-/** @brief GPIO pin for output channel 1 (defaults to LED1) */
-#define OUTPUT_PIN_1 LED1_PIN
-
-/** @brief GPIO pin for output channel 2 (defaults to LED2) */
-#define OUTPUT_PIN_2 LED2_PIN
-
-/** @} */ // end of hw_config
-
-/*==============================================================================
- * ADC CONFIGURATION
- *============================================================================*/
-
-/**
- * @defgroup adc_config ADC Configuration
- * @brief SAADC sampling and processing parameters
- * @{
- */
-
-/** 
- * @brief SAADC input channel 0 selection
- * @note Use NRF_SAADC_INPUT_AIN0 through NRF_SAADC_INPUT_AIN7 for available inputs
- */
-#define SAADC_CHANNEL0_AIN NRF_SAADC_INPUT_AIN0
-
-/**
- * @brief Enable second ADC channel
- * @note Set to 1 to enable dual-channel sampling, 0 for single channel only
- */
-#define SAADC_DUAL_CHANNEL_ENABLED 0
-
-#if SAADC_DUAL_CHANNEL_ENABLED
-/** 
- * @brief SAADC input channel 1 selection
- * @note Second ADC channel samples in parallel with channel 0
- */
-#define SAADC_CHANNEL1_AIN NRF_SAADC_INPUT_AIN3
-
-/**
- * @brief Number of ADC channels
- */
-#define SAADC_CHANNEL_COUNT 2
-#else
-/**
- * @brief Number of ADC channels
- */
-#define SAADC_CHANNEL_COUNT 1
-#endif
-
-/** 
- * @brief ADC resolution (8, 10, 12, or 14 bits)
- * @note Higher resolution = more accurate but slower conversion
- */
-#define SAADC_RESOLUTION NRF_SAADC_RESOLUTION_10BIT
-
-/** 
- * @brief ADC interrupt batch size
- * @note Samples are buffered and processed in batches to reduce interrupt overhead.
- *       Higher values = less CPU overhead but higher latency.
- *       Recommended: 8 for balanced performance.
- */
-#define ADC_INTERRUPT_BATCH_SIZE 8
-
-/** 
- * @brief ADC logging frequency
- * @note Only log every Nth sample to avoid overwhelming the console.
- *       Set to 1 to log every sample (high overhead).
- *       Set to 100+ for production (minimal overhead).
- */
-#define LOG_EVERY_N_SAMPLES 100
-
-/** @} */ // end of adc_config
-
-/*==============================================================================
- * TIMING CONFIGURATION
- *============================================================================*/
-
-/**
- * @defgroup timing_config Timing Configuration
- * @brief Pulse generation and state machine timing parameters
- * @{
- */
-
-/** 
- * @brief MUX pre-load advance time in microseconds
- * @note The state timer generates TWO events per state:
- *       - CC1 fires ADVANCE_TIME microseconds BEFORE state transition
- *       - CC0 fires at the actual state transition time
- *       
- *       This ensures the MUX pattern is sent early enough to arrive
- *       via SPI before the pulse starts.
- *       
- *       Typical values:
- *       - 50µs: Fast SPI, short cables
- *       - 200µs: Normal operation (recommended)
- *       - 500µs: Slow SPI or long cables
- */
-#define MUX_ADVANCE_TIME_US 50
-
-/** @} */ // end of timing_config
+/* Include driver-specific configurations */
+#include "drivers/mux/mux_config.h"
+#include "drivers/saadc/saadc_config.h"
+#include "drivers/timers/timer_config.h"
+#include "drivers/gpiote/gpiote_config.h"
+#include "drivers/dac/dac_config.h"
 
 /*==============================================================================
  * PULSE GENERATION PARAMETERS
@@ -197,46 +84,6 @@
 /** @} */ // end of pulse_params
 
 /*==============================================================================
- * MUX PATTERNS
- *============================================================================*/
-
-/**
- * @defgroup mux_patterns MUX Output Patterns
- * @brief 16-bit patterns sent to MUX for each of the 8 pulses
- * @{
- */
-
-/** 
- * @brief MUX patterns for 8 sequential pulses
- * @note Each pattern is a 16-bit value sent to the MUX controller.
- *       Pattern format depends on your MUX hardware design.
- *       Default patterns use a walking bit pattern for demonstration.
- *       
- *       Customize these patterns based on your MUX routing requirements:
- *       - Pulse 1: Channel 0 (0x0101)
- *       - Pulse 2: Channel 1 (0x0202)
- *       - Pulse 3: Channel 2 (0x0404)
- *       - Pulse 4: Channel 3 (0x0808)
- *       - Pulse 5: Channel 4 (0x1010)
- *       - Pulse 6: Channel 5 (0x2020)
- *       - Pulse 7: Channel 6 (0x4040)
- *       - Pulse 8: Channel 7 (0x8080)
- */
-#define MUX_PATTERN_PULSE_1  0x0101
-#define MUX_PATTERN_PULSE_2  0x0202
-#define MUX_PATTERN_PULSE_3  0x0404
-#define MUX_PATTERN_PULSE_4  0x0808
-#define MUX_PATTERN_PULSE_5  0x1010
-#define MUX_PATTERN_PULSE_6  0x2020
-#define MUX_PATTERN_PULSE_7  0x4040
-#define MUX_PATTERN_PULSE_8  0x8080
-
-/** @brief MUX pattern for PAUSE state (all channels off) */
-#define MUX_PATTERN_PAUSE    0x0000
-
-/** @} */ // end of mux_patterns
-
-/*==============================================================================
  * FEATURE ENABLES
  *============================================================================*/
 
@@ -291,22 +138,5 @@
 #define NRFX_EXAMPLE_CONFIG_LOG_LEVEL 3
 
 /** @} */ // end of logging
-
-/*==============================================================================
- * VALIDATION MACROS (DO NOT MODIFY)
- *============================================================================*/
-
-/* Compile-time checks to catch configuration errors */
-#if TIMER_PULSE_IDX == TIMER_STATE_IDX
-#error "TIMER_PULSE_IDX and TIMER_STATE_IDX must be different!"
-#endif
-
-#if ADC_INTERRUPT_BATCH_SIZE < 1 || ADC_INTERRUPT_BATCH_SIZE > 128
-#error "ADC_INTERRUPT_BATCH_SIZE must be between 1 and 128"
-#endif
-
-#if MUX_ADVANCE_TIME_US < 10 || MUX_ADVANCE_TIME_US > 1000
-#warning "MUX_ADVANCE_TIME_US is outside recommended range (10-1000µs)"
-#endif
 
 #endif /* CONFIG_H */
