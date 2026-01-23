@@ -18,6 +18,7 @@
 #include "drivers/gppi/gppi.h"
 #include "drivers/gpiote/gpiote.h"
 #include "drivers/saadc/saadc.h"
+#include "drivers/dac/dac.h"
 
 #include <nrfx_log.h>
 
@@ -56,6 +57,15 @@ int main(void)
                 NRFX_TIMER_INST_HANDLER_GET(TIMER_PULSE_IDX), 0, 0);
     IRQ_CONNECT(NRFX_IRQ_NUMBER_GET(NRF_TIMER_INST_GET(TIMER_STATE_IDX)), IRQ_PRIO_LOWEST,
                 NRFX_TIMER_INST_HANDLER_GET(TIMER_STATE_IDX), 0, 0);
+    
+    // DAC TWIM interrupt (TWIM0 for nRF52 series)
+    #if defined(NRF52_SERIES)
+    IRQ_CONNECT(NRFX_IRQ_NUMBER_GET(NRF_TWIM_INST_GET(0)), IRQ_PRIO_LOWEST,
+                NRFX_TWIM_INST_HANDLER_GET(0), 0, 0);
+    #else
+    IRQ_CONNECT(NRFX_IRQ_NUMBER_GET(NRF_TWIM_INST_GET(1)), IRQ_PRIO_LOWEST,
+                NRFX_TWIM_INST_HANDLER_GET(1), 0, 0);
+    #endif
 #endif
 
     NRFX_EXAMPLE_LOG_INIT();
@@ -92,6 +102,15 @@ int main(void)
         while(1) { k_sleep(K_FOREVER); }
     }
     printk("MUX initialized OK\n");
+
+    // ========== DAC INIT ==========
+    status = dac_init();
+    if (status == NRFX_SUCCESS) {
+        printk("DAC (MCP4725) initialized\n");
+        dac_set_value(0);  // Start at 0V
+    } else {
+        printk("DAC init failed (optional peripheral)\n");
+    }
 
     // ========== GPPI SETUP ==========
     status = gppi_setup_connections(gpiote_ch_pin1, gpiote_ch_pin2);
