@@ -157,7 +157,7 @@ static void ble_process_command(const char *data, uint16_t len)
                 printk("[BLE_CMD] Maximum achievable frequency: %d Hz\n", max_freq);
                 printk("[BLE_CMD] Active time: %d µs (8 pulses * %d µs)\n",
                        CALCULATE_ACTIVE_TIME_US(current_pulse_width),
-                       (current_pulse_width * 100 * 2 + 100));
+                       (current_pulse_width * 100 * 2 + PULSE_OVERHEAD_US));
                 NRFX_LOG_WARNING("Frequency %d Hz exceeds maximum %d Hz for pulse width %d",
                                 freq, max_freq, current_pulse_width);
                 return;

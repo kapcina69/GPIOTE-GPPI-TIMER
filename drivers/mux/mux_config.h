@@ -13,7 +13,7 @@
  *============================================================================*/
 
 /** @brief SPIM instance index for MUX control */
-#define SPIM_INST_IDX 2
+#define SPIM_INST_IDX 1
 
 /** 
  * @brief MUX pre-load advance time in microseconds
@@ -29,7 +29,7 @@
  *       - 200µs: Normal operation (recommended)
  *       - 500µs: Slow SPI or long cables
  */
-#define MUX_ADVANCE_TIME_US 50
+#define MUX_ADVANCE_TIME_US 35
 
 /*==============================================================================
  * MUX PATTERNS

@@ -21,7 +21,6 @@ target_sources(app PRIVATE
     drivers/gpiote/gpiote.c
     drivers/saadc/saadc.c
     drivers/dac/dac.c
-    drivers/dac/dac_test.c
 )
 target_include_directories(app PRIVATE 
     ../../../common 

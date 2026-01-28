@@ -18,9 +18,9 @@
 #include <nrfx_log.h>
 
 /* SPI pins - using loopback pins from nrfx_example.h */
-#define MOSI_PIN LOOPBACK_PIN_1A
+#define MOSI_PIN 29
 #define MISO_PIN LOOPBACK_PIN_1B
-#define SCK_PIN  LOOPBACK_PIN_2A
+#define SCK_PIN  30
 
 /* Internal state */
 static uint8_t m_tx_buffer[2];

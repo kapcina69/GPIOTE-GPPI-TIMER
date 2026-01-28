@@ -12,6 +12,7 @@
  */
 
 #include "timer.h"
+#include "dac.h"
 #include "../../config.h"
 #include "../../services/ble.h"
 #include "../mux/mux.h"
@@ -32,6 +33,21 @@ static const uint16_t mux_patterns[8] = {
     MUX_PATTERN_PULSE_6,
     MUX_PATTERN_PULSE_7,
     MUX_PATTERN_PULSE_8
+};
+
+/* DAC values corresponding to each pulse (PULSE_1..PULSE_8)
+ * These values will be applied before the corresponding pulse
+ * (pre-load) so DAC output is ready when the pulse starts.
+ */
+static const uint16_t dac_values[8] = {
+    500,  /* PULSE_1 */
+    800,  /* PULSE_2 */
+    1200, /* PULSE_3 */
+    1600, /* PULSE_4 */
+    2000, /* PULSE_5 */
+    2400, /* PULSE_6 */
+    2800, /* PULSE_7 */
+    3200  /* PULSE_8 */
 };
 
 // State machine
@@ -59,38 +75,75 @@ static volatile uint32_t state_transitions = 0;
 static void state_timer_handler(nrf_timer_event_t event_type, void * p_context)
 {
     uint32_t pulse_us = ble_get_pulse_width_ms() * 100;
-    uint32_t single_pulse_us = pulse_us * 2 + 100;
+    uint32_t single_pulse_us = pulse_us * 2 + PULSE_OVERHEAD_US;
     
     // ========== CC_CHANNEL1: MUX PRE-LOAD EVENT ==========
     if (event_type == NRF_TIMER_EVENT_COMPARE1) {
         // Send MUX pattern for NEXT state (before state actually transitions)
         switch(current_state) {
             case STATE_PULSE_1:
-                mux_write(mux_patterns[1]);  // Pre-load for PULSE_2
+                /* Pre-load for PULSE_2 */
+                mux_write(mux_patterns[1]);
+                #if ENABLE_DAC_PRELOAD
+                    dac_set_value(dac_values[1]);
+                #endif
                 break;
             case STATE_PULSE_2:
-                mux_write(mux_patterns[2]);  // Pre-load for PULSE_3
+                /* Pre-load for PULSE_3 */
+                mux_write(mux_patterns[2]);
+                #if ENABLE_DAC_PRELOAD
+                    dac_set_value(dac_values[2]);
+                #endif
                 break;
             case STATE_PULSE_3:
-                mux_write(mux_patterns[3]);  // Pre-load for PULSE_4
+                /* Pre-load for PULSE_4 */
+                mux_write(mux_patterns[3]);
+                #if ENABLE_DAC_PRELOAD
+                    dac_set_value(dac_values[3]);
+                #endif
                 break;
             case STATE_PULSE_4:
-                mux_write(mux_patterns[4]);  // Pre-load for PULSE_5
+                /* Pre-load for PULSE_5 */
+                mux_write(mux_patterns[4]);
+                #if ENABLE_DAC_PRELOAD
+                    dac_set_value(dac_values[4]);
+                #endif
                 break;
             case STATE_PULSE_5:
-                mux_write(mux_patterns[5]);  // Pre-load for PULSE_6
+                /* Pre-load for PULSE_6 */
+                mux_write(mux_patterns[5]);
+                #if ENABLE_DAC_PRELOAD
+                    dac_set_value(dac_values[5]);
+                #endif
                 break;
             case STATE_PULSE_6:
-                mux_write(mux_patterns[6]);  // Pre-load for PULSE_7
+                /* Pre-load for PULSE_7 */
+                mux_write(mux_patterns[6]);
+                #if ENABLE_DAC_PRELOAD
+                    dac_set_value(dac_values[6]);
+                #endif
                 break;
             case STATE_PULSE_7:
-                mux_write(mux_patterns[7]);  // Pre-load for PULSE_8
+                /* Pre-load for PULSE_8 */
+                mux_write(mux_patterns[7]);
+                #if ENABLE_DAC_PRELOAD
+                    dac_set_value(dac_values[7]);
+                #endif
                 break;
             case STATE_PULSE_8:
-                mux_write(MUX_PATTERN_PAUSE);  // Pre-load for PAUSE (all off)
+                /* Pre-load for PAUSE (all off) */
+                mux_write(MUX_PATTERN_PAUSE);
+                #if ENABLE_DAC_PRELOAD
+                    /* Set DAC to 0 during pause */
+                    dac_set_value(0);
+                #endif
                 break;
             case STATE_PAUSE:
-                mux_write(mux_patterns[0]);  // Pre-load for PULSE_1 (restart)
+                /* Pre-load for PULSE_1 (restart) */
+                mux_write(mux_patterns[0]);
+                #if ENABLE_DAC_PRELOAD
+                    dac_set_value(dac_values[0]);
+                #endif
                 break;
         }
         return;  // Only send pattern, don't change state

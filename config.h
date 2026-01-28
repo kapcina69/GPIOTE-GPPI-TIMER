@@ -50,7 +50,7 @@
  *       - * 2: Pulse consists of HIGH + LOW periods
  *       - + PULSE_OVERHEAD_US: Fixed overhead for each pulse
  */
-#define PULSE_OVERHEAD_US 100
+#define PULSE_OVERHEAD_US 20
 
 /** 
  * @brief Multiplier for pulse width calculation
@@ -115,6 +115,14 @@
 
 /** @} */ // end of features
 
+/**
+ * @brief Enable DAC pre-loading with per-pulse values
+ *
+ * When enabled (1), the timer state handler will call `dac_set_value()`
+ * for the next pulse during the MUX pre-load event (CC1). Default is 0
+ * (disabled) to avoid extra SPI activity unless explicitly requested.
+ */
+#define ENABLE_DAC_PRELOAD 1
 /*==============================================================================
  * LOGGING CONFIGURATION
  *============================================================================*/

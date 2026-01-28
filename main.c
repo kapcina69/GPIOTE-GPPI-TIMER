@@ -58,19 +58,20 @@ int main(void)
     IRQ_CONNECT(NRFX_IRQ_NUMBER_GET(NRF_TIMER_INST_GET(TIMER_STATE_IDX)), IRQ_PRIO_LOWEST,
                 NRFX_TIMER_INST_HANDLER_GET(TIMER_STATE_IDX), 0, 0);
     
-    // DAC TWIM interrupt (TWIM0 for nRF52 series)
-    #if defined(NRF52_SERIES)
-    IRQ_CONNECT(NRFX_IRQ_NUMBER_GET(NRF_TWIM_INST_GET(0)), IRQ_PRIO_LOWEST,
-                NRFX_TWIM_INST_HANDLER_GET(0), 0, 0);
-    #else
-    IRQ_CONNECT(NRFX_IRQ_NUMBER_GET(NRF_TWIM_INST_GET(1)), IRQ_PRIO_LOWEST,
-                NRFX_TWIM_INST_HANDLER_GET(1), 0, 0);
-    #endif
+    
 #endif
 
     NRFX_EXAMPLE_LOG_INIT();
     NRFX_LOG_INFO("=== DUAL CC CHANNEL MUX MODE ===");
     NRFX_LOG_INFO("MUX advance time: %d us", MUX_ADVANCE_TIME_US);
+
+    // ========== DAC INIT ==========
+    nrfx_spim_t spim_dac = NRFX_SPIM_INSTANCE(DAC_SPIM_INST_IDX);
+    nrfx_err_t dac_err = dac_init(&spim_dac);
+    if (dac_err != NRFX_SUCCESS) {
+        NRFX_LOG_ERROR("DAC init failed: 0x%08X", dac_err);
+        while(1) { k_sleep(K_FOREVER); }
+    }
 
     // ========== SAADC INIT ==========
     status = saadc_init();
@@ -103,14 +104,7 @@ int main(void)
     }
     printk("MUX initialized OK\n");
 
-    // ========== DAC INIT ==========
-    status = dac_init();
-    if (status == NRFX_SUCCESS) {
-        printk("DAC (MCP4725) initialized\n");
-        dac_set_value(0);  // Start at 0V
-    } else {
-        printk("DAC init failed (optional peripheral)\n");
-    }
+ 
 
     // ========== GPPI SETUP ==========
     status = gppi_setup_connections(gpiote_ch_pin1, gpiote_ch_pin2);

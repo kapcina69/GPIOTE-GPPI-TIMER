@@ -2,7 +2,7 @@
  * @file dac_config.h
  * @brief DAC Driver Configuration
  * 
- * Configuration parameters specific to the DAC (MCP4725) driver.
+ * Configuration parameters specific to the SPI DAC driver.
  */
 
 #ifndef DAC_CONFIG_H
@@ -12,16 +12,22 @@
  * DAC HARDWARE CONFIGURATION
  *============================================================================*/
 
-/** @brief TWIM (I2C) instance index for DAC */
-#define DAC_TWIM_INST_IDX 0
+/** @brief SPIM instance index for DAC (independent from MUX) */
+#define DAC_SPIM_INST_IDX 2
 
-/** @brief I2C SDA pin for DAC (MCP4725) */
-#define DAC_SDA_PIN 26
+#define DAC_CS_PIN   16   // ← Slobodan pin
+#define DAC_MOSI_PIN 3   // ← Slobodan pin
+#define DAC_SCK_PIN  4   // ← Slobodan pin
 
-/** @brief I2C SCL pin for DAC (MCP4725) */
-#define DAC_SCL_PIN 27
 
-/** @brief MCP4725 DAC I2C address (0x60 or 0x61) */
-#define DAC_I2C_ADDR 0x60
+
+/** 
+ * @brief DAC resolution (depends on your SPI DAC chip)
+ * Common values: 8, 10, 12, 16 bits
+ */
+#define DAC_RESOLUTION_BITS 12
+
+/** @brief Maximum DAC value (2^resolution - 1) */
+#define DAC_MAX_VALUE ((1 << DAC_RESOLUTION_BITS) - 1)
 
 #endif /* DAC_CONFIG_H */
