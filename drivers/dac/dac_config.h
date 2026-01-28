@@ -15,9 +15,9 @@
 /** @brief SPIM instance index for DAC (independent from MUX) */
 #define DAC_SPIM_INST_IDX 2
 
-#define DAC_CS_PIN   16   // ← Slobodan pin
-#define DAC_MOSI_PIN 3   // ← Slobodan pin
-#define DAC_SCK_PIN  4   // ← Slobodan pin
+#define DAC_CS_PIN   15   // ← Slobodan pin
+#define DAC_MOSI_PIN 24   // ← Slobodan pin
+#define DAC_SCK_PIN  25   // ← Slobodan pin
 
 
 

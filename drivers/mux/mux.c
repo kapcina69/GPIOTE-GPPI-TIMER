@@ -18,9 +18,8 @@
 #include <nrfx_log.h>
 
 /* SPI pins - using loopback pins from nrfx_example.h */
-#define MOSI_PIN 29
-#define MISO_PIN LOOPBACK_PIN_1B
-#define SCK_PIN  30
+#define MOSI_PIN 3
+#define SCK_PIN  5
 
 /* Internal state */
 static uint8_t m_tx_buffer[2];
@@ -65,7 +64,7 @@ nrfx_err_t mux_init(nrfx_spim_t *spim)
     nrf_gpio_pin_clear(MUX_CLR_PIN);  /* CLR low = not clearing */
 
     /* Configure and initialize SPIM */
-    nrfx_spim_config_t config = NRFX_SPIM_DEFAULT_CONFIG(SCK_PIN, MOSI_PIN, MISO_PIN, 
+    nrfx_spim_config_t config = NRFX_SPIM_DEFAULT_CONFIG(SCK_PIN, MOSI_PIN, NRF_SPIM_PIN_NOT_CONNECTED, 
                                                           NRF_SPIM_PIN_NOT_CONNECTED);
     
     nrfx_err_t status = nrfx_spim_init(spim, &config, spim_handler, NULL);

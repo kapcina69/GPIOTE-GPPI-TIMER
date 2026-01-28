@@ -17,8 +17,8 @@ extern "C" {
 #endif
 
 /* MUX GPIO Control Pins */
-#define MUX_LE_PIN           1     /* P0.1  - Latch Enable */
-#define MUX_CLR_PIN          0     /* P0.0  - Clear */
+#define MUX_LE_PIN           22     /* P0.1  - Latch Enable */
+#define MUX_CLR_PIN          21     /* P0.0  - Clear */
 #define MUX_NUM_CHANNELS     16    /* 16 channels via 2-byte shift register */
 
 /**
