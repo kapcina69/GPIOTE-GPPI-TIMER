@@ -13,8 +13,8 @@
 
 #include "timer.h"
 #include "dac.h"
+#include "uart.h"
 #include "../../config.h"
-#include "../../services/ble.h"
 #include "../mux/mux.h"
 #include <nrfx_example.h>
 #include <zephyr/kernel.h>
@@ -74,7 +74,7 @@ static volatile uint32_t state_transitions = 0;
  */
 static void state_timer_handler(nrf_timer_event_t event_type, void * p_context)
 {
-    uint32_t pulse_us = ble_get_pulse_width_ms() * 100;
+    uint32_t pulse_us = uart_get_pulse_width_ms() * 100;
     uint32_t single_pulse_us = pulse_us * 2 + PULSE_OVERHEAD_US;
     
     // ========== CC_CHANNEL1: MUX PRE-LOAD EVENT ==========
@@ -156,11 +156,11 @@ static void state_timer_handler(nrf_timer_event_t event_type, void * p_context)
     
     state_transitions++;
     
-    // Check BLE updates
-    if (ble_parameters_updated()) {
-        ble_clear_update_flag();
-        
-        uint32_t new_pulse_us = ble_get_pulse_width_ms() * 100;
+    // Check UART parameter updates (UART provides the parameter API)
+    if (uart_parameters_updated()) {
+        uart_clear_update_flag();
+
+        uint32_t new_pulse_us = uart_get_pulse_width_ms() * 100;
         
         nrfx_timer_disable(&timer_pulse);
         nrfx_timer_clear(&timer_pulse);
@@ -215,7 +215,7 @@ static void state_timer_handler(nrf_timer_event_t event_type, void * p_context)
             nrfx_timer_disable(&timer_pulse);
             current_state = STATE_PAUSE;
             
-            uint32_t freq_hz = ble_get_frequency_hz();
+            uint32_t freq_hz = uart_get_frequency_hz();
             uint32_t active_period_us = single_pulse_us * 8;
             uint32_t total_period_us = 1000000 / freq_hz;
             uint32_t pause_us = (total_period_us > active_period_us) ? 

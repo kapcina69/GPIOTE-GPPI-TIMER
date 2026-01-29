@@ -19,6 +19,7 @@
 #include "drivers/gpiote/gpiote.h"
 #include "drivers/saadc/saadc.h"
 #include "drivers/dac/dac.h"
+#include "drivers/UART/uart.h"
 
 #include <nrfx_log.h>
 
@@ -89,7 +90,7 @@ int main(void)
     printk("GPPI channels allocated\n");
 
     // ========== TIMER INIT ==========
-    uint32_t pulse_us = ble_get_pulse_width_ms() * 100;
+    uint32_t pulse_us = uart_get_pulse_width_ms() * 100;
     status = timer_init(pulse_us);
     NRFX_ASSERT(status == NRFX_SUCCESS);
     printk("Timers initialized\n");
@@ -133,6 +134,7 @@ int main(void)
     } else {
         printk("BLE initialized successfully\n");
     }
+    uart_init();
 
 #if ENABLE_STATS_TIMER
     k_timer_start(&stats_timer, K_SECONDS(1), K_SECONDS(1));
@@ -145,6 +147,12 @@ int main(void)
     printk("=====================================\n\n");
 
     while (1) {
-        k_sleep(K_FOREVER);
+        while (1) {
+        uart_rx_process();  // Pozivaj periodično
+        
+
+        
+        k_msleep(5);
+    }
     }
 }
