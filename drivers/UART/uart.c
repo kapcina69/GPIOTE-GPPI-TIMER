@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <ctype.h>
 #include <stdarg.h>
 #include <zephyr/logging/log.h>
 #include "../config.h"
@@ -135,9 +136,10 @@ static void uart_process_command(const char *cmd_buffer, uint16_t len)
 	if (strncmp(cmd_buffer, "SF;", 3) == 0) {
 		LOG_INF("SF command detected");
 		const char *num_str = &cmd_buffer[3];
-		int freq = atoi(num_str);
+		/* Parse frequency as hexadecimal (e.g. "19" -> 0x19 == 25) */
+		int freq = (int)strtol(num_str, NULL, 16);
 
-		LOG_DBG("Parsed frequency: %d", freq);
+		LOG_DBG("Parsed frequency (hex): %d", freq);
 
 		if (freq >= MIN_FREQUENCY_HZ && freq <= MAX_FREQUENCY_HZ) {
 			uint32_t max_freq = get_max_frequency(current_pulse_width);
@@ -162,8 +164,9 @@ static void uart_process_command(const char *cmd_buffer, uint16_t len)
 		}
 	} else if (strncmp(cmd_buffer, "SW;", 3) == 0) {
 		LOG_INF("SW command detected");
-		int width = atoi(&cmd_buffer[3]);
-		LOG_DBG("Parsed pulse width: %d", width);
+		/* Parse pulse width as hexadecimal (e.g. "0A" -> 10) */
+		int width = (int)strtol(&cmd_buffer[3], NULL, 16);
+		LOG_DBG("Parsed pulse width (hex): %d", width);
 
 		if (width >= MIN_PULSE_WIDTH && width <= MAX_PULSE_WIDTH) {
 			uint32_t max_freq_new = get_max_frequency(width);
@@ -184,11 +187,12 @@ static void uart_process_command(const char *cmd_buffer, uint16_t len)
 		}
 	} else if (strncmp(cmd_buffer, "SA;", 3) == 0) {
 		LOG_INF("SA command detected");
-		int amplitude = atoi(&cmd_buffer[3]);
-		LOG_DBG("Parsed amplitude: %d", amplitude);
+		/* Parse amplitude as hexadecimal (e.g. "19" -> 25) */
+		int amplitude = (int)strtol(&cmd_buffer[3], NULL, 16);
+		LOG_DBG("Parsed amplitude (hex): %d", amplitude);
 
 		if (amplitude >= 1 && amplitude <= 30) {
-			uint16_t dac_value = (uint16_t)(amplitude * 8.5);
+			uint16_t dac_value = (uint16_t)((amplitude * 85u) / 10u);
 			dac_set_value(dac_value);
 			LOG_INF("Amplitude set to %d (DAC: %u)", amplitude, dac_value);
 			uart_printf("\r\nOK: Amplitude set to %d (DAC: %u)\r\n> ", amplitude, dac_value);
