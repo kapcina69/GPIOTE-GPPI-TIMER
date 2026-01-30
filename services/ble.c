@@ -19,18 +19,6 @@
 #define NRFX_LOG_MODULE BLE
 #include <nrfx_log.h>
 
-// Default values
-#define DEFAULT_FREQUENCY_HZ    1
-#define DEFAULT_PULSE_WIDTH     5  // 500ms
-
-// Limits
-#define MIN_FREQUENCY_HZ        1
-#define MAX_FREQUENCY_HZ        100
-#define MIN_PULSE_WIDTH         1
-#define MAX_PULSE_WIDTH         10
-
-#define DEVICE_NAME CONFIG_BT_DEVICE_NAME
-#define DEVICE_NAME_LEN (sizeof(DEVICE_NAME) - 1)
 
 // Current settings (volatile jer se mogu menjati iz interrupt konteksta)
 static volatile uint32_t current_frequency_hz = DEFAULT_FREQUENCY_HZ;

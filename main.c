@@ -147,12 +147,6 @@ int main(void)
     printk("=====================================\n\n");
 
     while (1) {
-        while (1) {
-        uart_rx_process();  // Pozivaj periodično
-        
-
-        
-        k_msleep(5);
-    }
-    }
+    k_sleep(K_FOREVER); 
+}
 }

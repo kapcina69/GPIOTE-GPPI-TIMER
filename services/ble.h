@@ -9,6 +9,21 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+
+// Default values
+#define DEFAULT_FREQUENCY_HZ    1
+#define DEFAULT_PULSE_WIDTH     5  // 500ms
+
+// Limits
+#define MIN_FREQUENCY_HZ        1
+#define MAX_FREQUENCY_HZ        100
+#define MIN_PULSE_WIDTH         1
+#define MAX_PULSE_WIDTH         10
+
+#define DEVICE_NAME CONFIG_BT_DEVICE_NAME
+#define DEVICE_NAME_LEN (sizeof(DEVICE_NAME) - 1)
+
+
 /**
  * @brief Initialize BLE module
  * 

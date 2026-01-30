@@ -21,6 +21,7 @@ target_sources(app PRIVATE
     drivers/gpiote/gpiote.c
     drivers/saadc/saadc.c
     drivers/dac/dac.c
+    drivers/UART/uart.c
 )
 target_include_directories(app PRIVATE 
     ../../../common 
@@ -31,4 +32,5 @@ target_include_directories(app PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/drivers/gpiote
     ${CMAKE_CURRENT_SOURCE_DIR}/drivers/saadc
     ${CMAKE_CURRENT_SOURCE_DIR}/drivers/dac
+    ${CMAKE_CURRENT_SOURCE_DIR}/drivers/UART
 )

@@ -36,6 +36,10 @@ volatile bool parameters_updated = false;
 /* ================== PRIVATNE FUNKCIJE - DEKLARACIJE ================== */
 
 static void uart_process_command(const char *cmd_buffer, uint16_t len);
+static void uart_timer_callback(struct k_timer *timer);
+
+/* Timer za periodičko procesiranje UART-a */
+K_TIMER_DEFINE(uart_poll_timer, uart_timer_callback, NULL);
 
 /* ================== HELPER FUNKCIJE ================== */
 
@@ -78,8 +82,6 @@ uint32_t get_max_frequency(uint32_t pulse_width)
 	return result;
 }
 
-
-
 /* ================== UART FUNKCIJE ================== */
 
 int uart_init(void)
@@ -107,8 +109,12 @@ int uart_init(void)
 	uart_send("=================================\r\n");
 	uart_send("NOTE: Press ENTER after typing command!\r\n> ");
 
+	/* Pokreni timer za periodičko procesiranje UART-a */
+	k_timer_start(&uart_poll_timer, K_MSEC(5), K_MSEC(5));
+
 	LOG_INF("<<< uart_init: complete");
 	printk("[FUNC] uart_init complete\n");
+	printk("[FUNC] UART polling timer started (5ms interval)\n");
 	return 0;
 }
 
@@ -345,6 +351,19 @@ static void uart_process_command(const char *cmd_buffer, uint16_t len)
 	printk("[FUNC] ========================================\n\n");
 }
 
+/**
+ * @brief Timer callback - poziva se svakih 5ms za procesiranje UART-a
+ * NON-BLOCKING: Procesira SAMO JEDAN karakter po pozivu!
+ */
+static void uart_timer_callback(struct k_timer *timer)
+{
+	uart_rx_process();
+}
+
+/**
+ * @brief Procesira UART prijem - NON-BLOCKING verzija
+ * Procesira SAMO JEDAN karakter po pozivu!
+ */
 void uart_rx_process(void)
 {
 	uint8_t c;
@@ -353,7 +372,8 @@ void uart_rx_process(void)
 
 	poll_result = uart_poll_in(uart_dev, &c);
 	
-	while (poll_result == 0) {
+	/* KRITIČNA IZMENA: IF umesto WHILE - procesira samo JEDAN karakter! */
+	if (poll_result == 0) {
 		char_count++;
 		
 		LOG_DBG("RX char #%u: 0x%02X ('%c')", char_count, c, 
@@ -414,8 +434,7 @@ void uart_rx_process(void)
 		
 		last_rx_time = k_uptime_get();
 		
-		/* Proveri sledeći karakter */
-		poll_result = uart_poll_in(uart_dev, &c);
+		/* KRITIČNA IZMENA: NEMA VIŠE PETLJE - vraća kontrolu nakon JEDNOG karaktera! */
 	}
 }
 
