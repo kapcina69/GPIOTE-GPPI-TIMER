@@ -83,8 +83,9 @@ int uart_init(void)
 	uart_send("  SF;<freq>      - Set Frequency (1-100 Hz)\r\n");
 	uart_send("  SW;<width>     - Set Pulse Width (1-100)\r\n");
 	uart_send("  SA;<amplitude> - Set Amplitude (1-30)\r\n");
-	uart_send("  STATUS         - Show current settings\r\n");
-	uart_send("  HELP           - Show help\r\n");
+	/* STATUS and HELP commands removed */
+	uart_send("=================================\r\n");
+
 	uart_send("=================================\r\n");
 	uart_send("NOTE: Press ENTER after typing command!\r\n> ");
 
@@ -195,26 +196,11 @@ static void uart_process_command(const char *cmd_buffer, uint16_t len)
 			LOG_WRN("Amplitude %d out of range [1-30]", amplitude);
 			uart_send("\r\nERROR: Amplitude out of range [1-30]\r\n> ");
 		}
-	} else if (strncmp(cmd_buffer, "STATUS", 6) == 0 || strncmp(cmd_buffer, "status", 6) == 0) {
-		LOG_INF("STATUS command detected");
-		uart_send("\r\n--- Current Settings ---\r\n");
-		uart_printf("Frequency:   %u Hz\r\n", current_frequency_hz);
-		uart_printf("Pulse Width: %u (%u µs)\r\n", current_pulse_width, current_pulse_width * 100);
-		uart_printf("Max Freq:    %u Hz\r\n", get_max_frequency(current_pulse_width));
-		uart_printf("Param Flag:  %s\r\n", parameters_updated ? "TRUE" : "FALSE");
-		uart_send("------------------------\r\n> ");
-	} else if (strncmp(cmd_buffer, "HELP", 4) == 0 || strncmp(cmd_buffer, "help", 4) == 0) {
-		LOG_INF("HELP command detected");
-		uart_send("\r\n--- Available Commands ---\r\n");
-		uart_send("SF;<freq>      - Set Frequency (1-100 Hz)\r\n");
-		uart_send("SW;<width>     - Set Pulse Width (1-100)\r\n");
-		uart_send("SA;<amplitude> - Set Amplitude (1-30)\r\n");
-		uart_send("STATUS         - Show current settings\r\n");
-		uart_send("HELP           - Show this help\r\n");
-		uart_send("--------------------------\r\n> ");
+	/* STATUS and HELP command handling removed */
+	/* Removed commands will fall through to unknown-command handling */
 	} else {
 		LOG_WRN("Unknown command: '%s'", cmd_buffer);
-		uart_send("\r\nERROR: Unknown command. Type HELP for available commands.\r\n> ");
+		uart_send("\r\nERROR: Unknown command.\r\n> ");
 	}
 
 	LOG_INF("Command processing complete");
