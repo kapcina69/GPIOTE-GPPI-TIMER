@@ -35,7 +35,7 @@ static void dac_spim_handler(nrfx_spim_evt_t const *p_event, void *p_context)
 
 nrfx_err_t dac_init(nrfx_spim_t *spim)
 {
-    printk("Starting DAC init...\n");
+    NRFX_LOG_INFO("Starting DAC init...");
     if (spim == NULL) {
         return NRFX_ERROR_NULL;
     }
@@ -70,7 +70,7 @@ nrfx_err_t dac_init(nrfx_spim_t *spim)
 
     NRFX_LOG_INFO("SPI DAC initialized (CS=P0.%d, MOSI=P0.%d, SCK=P0.%d)", 
                   DAC_CS_PIN, DAC_MOSI_PIN, DAC_SCK_PIN);
-    printk("DAC initialized via SPI\n");
+    NRFX_LOG_INFO("DAC initialized via SPI");
 
     return NRFX_SUCCESS;
 }

@@ -39,7 +39,7 @@ static void stats_timer_callback(struct k_timer *timer)
     uint32_t current_count = saadc_get_sample_count();
     uint32_t samples_since_last = current_count - last_sample_count;
     uint32_t transitions = timer_get_transition_count();
-    printk("[STATS] Samples: %u (+%u/s), Trans: %u\n",
+    NRFX_LOG_INFO("[STATS] Samples: %u (+%u/s), Trans: %u",
            current_count,
            samples_since_last,
            transitions);
@@ -51,7 +51,7 @@ int main(void)
 {
     nrfx_err_t status;
     
-    printk("\n\n=== APP START (DUAL CC CHANNEL MODE) ===\n");
+    NRFX_LOG_INFO("=== APP START (DUAL CC CHANNEL MODE) ===");
 
 #if defined(__ZEPHYR__)
     IRQ_CONNECT(NRFX_IRQ_NUMBER_GET(NRF_TIMER_INST_GET(TIMER_PULSE_IDX)), IRQ_PRIO_LOWEST,
@@ -77,33 +77,33 @@ int main(void)
     // ========== SAADC INIT ==========
     status = saadc_init();
     NRFX_ASSERT(status == NRFX_SUCCESS);
-    printk("SAADC initialized\n");
+    NRFX_LOG_INFO("SAADC initialized");
 
     // ========== GPIOTE INIT ==========
     status = gpiote_init(&gpiote_ch_pin1, &gpiote_ch_pin2);
     NRFX_ASSERT(status == NRFX_SUCCESS);
-    printk("GPIOTE initialized\n");
+    NRFX_LOG_INFO("GPIOTE initialized");
 
     // ========== GPPI INIT ==========
     status = gppi_init();
     NRFX_ASSERT(status == NRFX_SUCCESS);
-    printk("GPPI channels allocated\n");
+    NRFX_LOG_INFO("GPPI channels allocated");
 
     // ========== TIMER INIT ==========
     uint32_t pulse_us = uart_get_pulse_width_ms() * 100;
     status = timer_init(pulse_us);
     NRFX_ASSERT(status == NRFX_SUCCESS);
-    printk("Timers initialized\n");
+    NRFX_LOG_INFO("Timers initialized");
 
     // ========== MUX INIT ==========
-    printk("Initializing MUX...\n");
+    NRFX_LOG_INFO("Initializing MUX...");
     nrfx_spim_t spim = NRFX_SPIM_INSTANCE(SPIM_INST_IDX);
     nrfx_err_t mux_err = mux_init(&spim);
     if (mux_err != NRFX_SUCCESS) {
         NRFX_LOG_ERROR("MUX init failed: 0x%08X", mux_err);
         while(1) { k_sleep(K_FOREVER); }
     }
-    printk("MUX initialized OK\n");
+    NRFX_LOG_INFO("MUX initialized OK");
 
  
 
@@ -111,7 +111,7 @@ int main(void)
     status = gppi_setup_connections(gpiote_ch_pin1, gpiote_ch_pin2);
     NRFX_ASSERT(status == NRFX_SUCCESS);
     gppi_enable();
-    printk("GPPI connections configured and enabled\n");
+    NRFX_LOG_INFO("GPPI connections configured and enabled");
 
     // Initial MUX pattern for PULSE_1
     mux_write(MUX_PATTERN_PULSE_1);
@@ -121,30 +121,23 @@ int main(void)
     uint32_t single_pulse_us = pulse_us * 2 + 100;
     timer_set_state_pulse(single_pulse_us);
     
-    printk("Timers enabled with dual CC channels\n");
+    NRFX_LOG_INFO("Timers enabled with dual CC channels");
     NRFX_LOG_INFO("System started - DUAL CC MODE");
 
     k_sleep(K_MSEC(100));
 
-    // ========== BLE INIT ==========
-    printk("Starting BLE initialization...\n");
-    int ble_err = ble_init();
-    if (ble_err) {
-        NRFX_LOG_ERROR("BLE init failed: %d", ble_err);
-    } else {
-        printk("BLE initialized successfully\n");
-    }
+    // ========== UART INIT ==========
     uart_init();
 
 #if ENABLE_STATS_TIMER
     k_timer_start(&stats_timer, K_SECONDS(1), K_SECONDS(1));
 #endif
     
-    printk("\n=== DUAL CC CHANNEL CONFIGURATION ===\n");
-    printk("State timer CC0: State transition\n");
-    printk("State timer CC1: MUX pre-load (%d us advance)\n", MUX_ADVANCE_TIME_US);
-    printk("Expected: 8 MUX writes per cycle (1 per pulse)\n");
-    printk("=====================================\n\n");
+    NRFX_LOG_INFO("=== DUAL CC CHANNEL CONFIGURATION ===");
+    NRFX_LOG_INFO("State timer CC0: State transition");
+    NRFX_LOG_INFO("State timer CC1: MUX pre-load (%d us advance)", MUX_ADVANCE_TIME_US);
+    NRFX_LOG_INFO("Expected: 8 MUX writes per cycle (1 per pulse)");
+    NRFX_LOG_INFO("=====================================");
 
     while (1) {
     k_sleep(K_FOREVER); 

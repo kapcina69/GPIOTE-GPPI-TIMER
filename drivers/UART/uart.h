@@ -10,7 +10,15 @@
 #define UART_BUF_SIZE            32
 #define UART_RX_TIMEOUT_MS       100
 
+// Default values
+#define DEFAULT_FREQUENCY_HZ    1
+#define DEFAULT_PULSE_WIDTH     5  // 500ms
 
+// Limits
+#define MIN_FREQUENCY_HZ        1
+#define MAX_FREQUENCY_HZ        100
+#define MIN_PULSE_WIDTH         1
+#define MAX_PULSE_WIDTH         10
 
 /* ================== JAVNE PROMENLJIVE ================== */
 
