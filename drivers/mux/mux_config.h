@@ -29,7 +29,7 @@
  *       - 200µs: Normal operation (recommended)
  *       - 500µs: Slow SPI or long cables
  */
-#define MUX_ADVANCE_TIME_US 35
+#define MUX_ADVANCE_TIME_US 50
 
 /*==============================================================================
  * MUX PATTERNS

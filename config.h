@@ -50,7 +50,7 @@
  *       - * 2: Pulse consists of HIGH + LOW periods
  *       - + PULSE_OVERHEAD_US: Fixed overhead for each pulse
  */
-#define PULSE_OVERHEAD_US 20
+#define PULSE_OVERHEAD_US 100
 
 /** 
  * @brief Multiplier for pulse width calculation
