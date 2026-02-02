@@ -1,12 +1,18 @@
 #ifndef UART_H
 #define UART_H
 
-#include <zephyr/kernel.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include "../config.h"
 #include "../drivers/dac/dac.h"
-/* ================== DEFINICIJE ================== */
 
+// UART konfiguracija
+#define UARTE_INST_IDX 1
+#define UARTE_TX_PIN 16
+#define UARTE_RX_PIN 15
+#define RX_CHUNK_SIZE 1
+#define CMD_BUFFER_SIZE 128
+#define TX_BUFFER_SIZE 128
 #define UART_BUF_SIZE            32
 #define UART_RX_TIMEOUT_MS       100
 
@@ -25,46 +31,42 @@
 extern volatile uint32_t current_frequency_hz;
 extern volatile uint32_t current_pulse_width;
 extern volatile bool parameters_updated;
-
-/* ================== JAVNE FUNKCIJE ================== */
-
 /**
  * @brief Inicijalizuje UART modul
- * @return 0 ako je uspešno, negativan broj ako nije
+ * @return 0 na uspeh, negativna vrednost na grešku
  */
 int uart_init(void);
 
 /**
  * @brief Šalje string preko UART-a
- * @param s Pointer na null-terminated string
+ * @param data String za slanje
+ * @return 0 na uspeh, negativna vrednost na grešku
  */
-void uart_send(const char *s);
+int uart_send(const char *data);
 
 /**
- * @brief Formatira i šalje string preko UART-a (kao printf)
- * @param format Format string
- * @param ... Argumenti
+ * @brief Šalje formatiran odgovor (>response<)
+ * @param response Sadržaj odgovora (bez > i <)
  */
-void uart_printf(const char *format, ...);
+void uart_send_response(const char *response);
 
 /**
- * @brief Procesira primljene podatke sa UART-a
- * Poziva se periodično iz main loop-a
+ * @brief Proverava da li je TX zauzet
+ * @return true ako je TX u toku
  */
-void uart_rx_process(void);
+bool uart_is_tx_busy(void);
 
 /**
- * @brief Kalkuliše maksimalnu frekvenciju za zadatu širinu pulsa
- * @param pulse_width Širina pulsa
- * @return Maksimalna frekvencija u Hz
+ * @brief Pokreće test timer za periodično slanje komandi
+ * @param interval_ms Interval u milisekundama
  */
-uint32_t get_max_frequency(uint32_t pulse_width);
+void uart_start_test_timer(uint32_t interval_ms);
 
 /**
- * @brief Kalkuliše pauzu u milisekundama na osnovu frekvencije
- * @param freq_hz Frekvencija u Hz
- * @return Pauza u milisekundama
+ * @brief Zaustavlja test timer
  */
+void uart_stop_test_timer(void);
+
 uint32_t frequency_to_pause_ms(uint32_t freq_hz);
 
 uint32_t uart_get_pause_time_ms(void);
@@ -103,6 +105,5 @@ bool uart_parameters_updated(void);
  * @brief Clear the updated flag after reading new parameters
  */
 void uart_clear_update_flag(void);
-
 
 #endif /* UART_H */

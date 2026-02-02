@@ -128,7 +128,8 @@ int main(void)
 
     // ========== UART INIT ==========
     uart_init();
-
+    uart_start_test_timer(4000);
+    printk("Ready to receive commands...\n\n");
 #if ENABLE_STATS_TIMER
     k_timer_start(&stats_timer, K_SECONDS(1), K_SECONDS(1));
 #endif

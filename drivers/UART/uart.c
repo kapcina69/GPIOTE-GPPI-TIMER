@@ -1,38 +1,156 @@
 #include "uart.h"
-/*
- * UART command interface (uses Zephyr logging instead of printk)
- */
-
-#include "uart.h"
+#include <nrfx_uarte.h>
+#include <zephyr/irq.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/kernel.h>
 #include <zephyr/drivers/uart.h>
-#include <stdlib.h>
 #include <string.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <ctype.h>
 #include <stdarg.h>
-#include <zephyr/logging/log.h>
 #include "../config.h"
 #include "../drivers/dac/dac.h"
-#include <zephyr/kernel.h>
+#include "../drivers/timers/timer.h"
 
 LOG_MODULE_REGISTER(uart_cmd, LOG_LEVEL_DBG);
 
-#define UART_NODE DT_NODELABEL(uart0)
+/* ============================================================
+ *                    CONSTANTS & DEFINES
+ * ============================================================ */
 
-static const struct device *uart_dev = DEVICE_DT_GET(UART_NODE);
+// Timeout konstante
+#define TX_BUSY_TIMEOUT_ITERATIONS  1000
+#define TX_BUSY_WAIT_US             100
 
-static char uart_buf[UART_BUF_SIZE];
-static uint8_t uart_len = 0;
-static int64_t last_rx_time = 0;
+// Broj elemenata u nizu
+#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
+
+/* ============================================================
+ *                    TYPE DEFINITIONS
+ * ============================================================ */
+
+// Tip za command handler funkciju
+typedef void (*cmd_handler_t)(const char *args);
+
+// Struktura za jednu komandu u lookup tabeli
+typedef struct {
+    const char *prefix;      // Prefiks komande (npr. "SON", "PW;")
+    size_t prefix_len;       // Dužina prefiksa
+    bool has_args;           // Da li ima argumente nakon prefiksa
+    cmd_handler_t handler;   // Function pointer na handler
+} cmd_entry_t;
+
+/* ============================================================
+ *                    PRIVATE VARIABLES
+ * ============================================================ */
+
+// Privatni baferi
+static uint8_t m_rx_chunk[RX_CHUNK_SIZE];
+static char cmd_buffer[CMD_BUFFER_SIZE];
+static char tx_buffer[TX_BUFFER_SIZE];
+static size_t cmd_index = 0;
+static bool cmd_started = false;
+static volatile bool tx_busy = false;
+static nrfx_uarte_t uarte_inst = NRFX_UARTE_INSTANCE(UARTE_INST_IDX);
 
 volatile uint32_t current_frequency_hz = 1;
 volatile uint32_t current_pulse_width = 5;
 volatile bool parameters_updated = false;
 
-static void uart_process_command(const char *cmd_buffer, uint16_t len);
-static void uart_timer_callback(struct k_timer *timer);
+// Sockeet parametri
+static bool stimulation_running = false;
+static float voltage_amplitude = 1.0f;
+static uint16_t cathode_channels[16] = {0};
 
-K_TIMER_DEFINE(uart_poll_timer, uart_timer_callback, NULL);
+// Test komande za periodično slanje
+static const char* test_commands[] = {
+    ">SON<",
+    ">PW;a<",
+    ">SOFF<",
+    ">PW;1<",
+    ">SON<",
+    ">SA;0064<",
+    ">SF;19<",
+    ">SON<",
+    ">PW;1<",
+    ">PW;3<",
+    ">PW;7<",
+    ">PW;10<",
+    ">SA;32<",
+    ">SA;C8<",
+    ">SA;2C<",
+    ">SF;A<",
+    ">SF;32<",
+    ">SF;50<",
+    ">SON<",
+    ">SOFF<",
+    ">PW;8<",
+    ">SA;FA<",
+    ">SF;64<"
+};
+static uint8_t current_cmd_index = 0;
+
+/* ============================================================
+ *                    FORWARD DECLARATIONS
+ * ============================================================ */
+
+// UART driver
+static void uarte_handler(nrfx_uarte_event_t const *p_event, void *p_context);
+static void process_command(const char *cmd);
+
+// Command handlers
+static void handle_son(const char *args);
+static void handle_soff(const char *args);
+static void handle_pw(const char *args);
+static void handle_sa(const char *args);
+static void handle_sf(const char *args);
+static void handle_sc(const char *args);
+
+// Helper functions
+static void print_current_state(void);
+
+/* ============================================================
+ *                    COMMAND LOOKUP TABLE
+ * ============================================================ */
+
+static const cmd_entry_t cmd_table[] = {
+    {"SON",  3, false, handle_son},
+    {"SOFF", 4, false, handle_soff},
+    {"PW;",  3, true,  handle_pw},
+    {"SA;",  3, true,  handle_sa},
+    {"SF;",  3, true,  handle_sf},
+    {"SC;",  3, true,  handle_sc},
+};
+
+/**
+ * @brief Šalje odgovor nazad kroz UART
+ */
+void uart_send_response(const char *response)
+{
+    nrfx_err_t status;
+    
+    uint32_t timeout = TX_BUSY_TIMEOUT_ITERATIONS;
+    while (tx_busy && timeout > 0) {
+        k_busy_wait(TX_BUSY_WAIT_US);
+        timeout--;
+    }
+    
+    if (tx_busy) {
+        printk("WARNING: TX still busy, response dropped\n");
+        return;
+    }
+    
+    snprintf(tx_buffer, TX_BUFFER_SIZE, ">%s<", response);
+    
+    tx_busy = true;
+    status = nrfx_uarte_tx(&uarte_inst, (uint8_t*)tx_buffer, strlen(tx_buffer), 0);
+    if (status != NRFX_SUCCESS) {
+        printk("Response TX failed: 0x%08X\n", (unsigned int)status);
+        tx_busy = false;
+    }
+}
 
 uint32_t frequency_to_pause_ms(uint32_t freq_hz)
 {
@@ -67,204 +185,366 @@ uint32_t get_max_frequency(uint32_t pulse_width)
 	return result;
 }
 
+/* ============================================================
+ *                    COMMAND HANDLERS
+ * ============================================================ */
+
+/**
+ * @brief Handler za SON komandu - uključuje stimulaciju
+ */
+static void handle_son(const char *args)
+{
+    (void)args;  // Nije potrebno
+    
+    stimulation_running = true;
+    
+    if (!timer_system_is_running()) {
+        timer_system_start();
+        printk("    Action: START stimulation (RUN mode)\n");
+        uart_send_response("SONOK");
+    } else {
+        printk("    Action: Already in RUN mode\n");
+        uart_send_response("SONOK");
+    }
+}
+
+/**
+ * @brief Handler za SOFF komandu - isključuje stimulaciju
+ */
+static void handle_soff(const char *args)
+{
+    (void)args;  // Nije potrebno
+    
+    stimulation_running = false;
+    
+    if (timer_system_is_running()) {
+        timer_system_stop();
+        printk("    Action: STOP stimulation (STOP mode)\n");
+        uart_send_response("OFFOK");
+    } else {
+        printk("    Action: Already in STOP mode\n");
+        uart_send_response("OFFOK");
+    }
+}
+
+/**
+ * @brief Handler za PW komandu - postavlja pulse width
+ * @param args HEX string vrednost (1-10)
+ */
+static void handle_pw(const char *args)
+{
+    uint8_t pw = (uint8_t)strtoul(args, NULL, 16);
+    
+    if (pw >= MIN_PULSE_WIDTH && pw <= MAX_PULSE_WIDTH) {
+        uint32_t max_freq_new = get_max_frequency(pw);
+        if (current_frequency_hz > max_freq_new) {
+            LOG_WRN("Pulse width %d reduces max frequency to %u Hz", pw, max_freq_new);
+            current_frequency_hz = max_freq_new;
+        }
+        current_pulse_width = pw;
+        printk("    Action: Set Pulse Width = %d (0x%02X)\n", 
+               (int)current_pulse_width, (int)current_pulse_width);
+        parameters_updated = true;
+        uart_send_response("PWOK");
+    } else {
+        printk("    Action: Pulse Width out of range (%d, 0x%02X)\n", pw, pw);
+        uart_send_response("PWERR");
+    }
+}
+
+/**
+ * @brief Handler za SA komandu - postavlja amplitudu napona
+ * @param args HEX string vrednost (1-30)
+ */
+static void handle_sa(const char *args)
+{
+    LOG_INF("SA command detected");
+    
+    int amplitude = (int)strtol(args, NULL, 16);
+    LOG_DBG("Parsed amplitude (hex): %d", amplitude);
+    
+    if (amplitude >= 1 && amplitude <= 30) {
+        // DAC formula: 8.5 LSB per unit amplitude (255 / 30 ≈ 8.5)
+        uint16_t dac_value = (uint16_t)((amplitude * 85u) / 10u);
+        voltage_amplitude = (float)amplitude;
+        dac_set_value(dac_value);
+        LOG_INF("Amplitude set to %d (DAC: %u)", amplitude, dac_value);
+        uart_send_response("SAOK");
+    } else {
+        LOG_WRN("Amplitude %d out of range [1-30]", amplitude);
+        uart_send_response("SAERR");
+    }
+}
+
+/**
+ * @brief Handler za SF komandu - postavlja frekvenciju
+ * @param args HEX string vrednost (1-100 Hz)
+ */
+static void handle_sf(const char *args)
+{
+    uint8_t freq = (uint8_t)strtoul(args, NULL, 16);
+    
+    if (freq >= MIN_FREQUENCY_HZ && freq <= MAX_FREQUENCY_HZ) {
+        uint32_t max_freq = get_max_frequency(current_pulse_width);
+        if (freq > max_freq) {
+            LOG_WRN("Frequency %d Hz too high for pulse width %u", freq, (unsigned)current_pulse_width);
+            uart_send_response("SFERR");
+            return;
+        }
+        
+        LOG_INF("Setting current_frequency_hz from %u to %d", (unsigned)current_frequency_hz, freq);
+        current_frequency_hz = freq;
+        parameters_updated = true;
+        
+        uint32_t pause = frequency_to_pause_ms(freq);
+        LOG_INF("Frequency set to %d Hz (pause: %u ms)", freq, pause);
+        uart_send_response("SFOK");
+    } else {
+        printk("    Action: Frequency out of range (%d Hz, hex: 0x%02X)\n", freq, freq);
+        uart_send_response("SFERR");
+    }
+}
+
+/**
+ * @brief Handler za SC komandu - postavlja katodne kanale
+ * @param args HEX string sa vrednostima kanala
+ */
+static void handle_sc(const char *args)
+{
+    (void)args;  // TODO: Implementirati parsiranje kanala
+    
+    printk("    Action: Set Cathode Channels\n");
+    // Implementacija za parsiranje kanala može se dodati ovde
+    uart_send_response("SCOK");
+}
+
+/* ============================================================
+ *                    COMMAND DISPATCHER
+ * ============================================================ */
+
+/**
+ * @brief Ispisuje trenutno stanje sistema
+ */
+static void print_current_state(void)
+{
+    printk("    Current State: %s, PW=%d(0x%02X), U=%.1fV, F=%uHz(0x%02X)\n\n", 
+           stimulation_running ? "RUN" : "STOP",
+           (int)current_pulse_width, (int)current_pulse_width,
+           voltage_amplitude, 
+           (unsigned)current_frequency_hz, (unsigned)current_frequency_hz);
+}
+
+/**
+ * @brief Parsira i izvršava primljenu komandu prema Sockeet protokolu
+ */
+static void process_command(const char *cmd)
+{
+    printk("\n>>> Command received: '%s'\n", cmd);
+    
+    // Prolazi kroz lookup tabelu i traži odgovarajući handler
+    for (size_t i = 0; i < ARRAY_SIZE(cmd_table); i++) {
+        if (strncmp(cmd, cmd_table[i].prefix, cmd_table[i].prefix_len) == 0) {
+            // Pronađena komanda - pozovi handler
+            const char *args = cmd_table[i].has_args ? (cmd + cmd_table[i].prefix_len) : NULL;
+            cmd_table[i].handler(args);
+            print_current_state();
+            return;
+        }
+    }
+    
+    // Nije pronađena nijedna komanda
+    printk("    Action: Unknown command\n");
+    uart_send_response("ERR");
+    print_current_state();
+}
+
+/* ============================================================
+ *                    UART DRIVER - IRQ HANDLER
+ * ============================================================ */
+static void uarte_handler(nrfx_uarte_event_t const *p_event, void *p_context)
+{
+    nrfx_err_t status;
+    
+    switch (p_event->type)
+    {
+        case NRFX_UARTE_EVT_TX_DONE:
+            tx_busy = false;
+            break;
+            
+        case NRFX_UARTE_EVT_RX_DONE:
+        {
+            char received_char = (char)m_rx_chunk[0];
+            
+            if (received_char == '>') {
+                cmd_started = true;
+                cmd_index = 0;
+                memset(cmd_buffer, 0, sizeof(cmd_buffer));
+            }
+            else if (received_char == '<') {
+                if (cmd_started && cmd_index > 0) {
+                    cmd_buffer[cmd_index] = '\0';
+                    process_command(cmd_buffer);
+                }
+                cmd_started = false;
+                cmd_index = 0;
+            }
+            else if (cmd_started) {
+                if (cmd_index < CMD_BUFFER_SIZE - 1) {
+                    cmd_buffer[cmd_index++] = received_char;
+                } else {
+                    printk("ERROR: Command buffer overflow!\n");
+                    cmd_started = false;
+                    cmd_index = 0;
+                }
+            }
+            
+            status = nrfx_uarte_rx(&uarte_inst, m_rx_chunk, RX_CHUNK_SIZE);
+            if (status != NRFX_SUCCESS) {
+                printk("RX restart failed: 0x%08X\n", (unsigned int)status);
+            }
+            break;
+        }
+            
+        case NRFX_UARTE_EVT_ERROR:
+            printk("[ERROR] 0x%08lX\n", p_event->data.error.error_mask);
+            cmd_started = false;
+            cmd_index = 0;
+            status = nrfx_uarte_rx(&uarte_inst, m_rx_chunk, RX_CHUNK_SIZE);
+            if (status != NRFX_SUCCESS) {
+                printk("RX restart after error failed: 0x%08X\n", (unsigned int)status);
+            }
+            break;
+            
+        default:
+            break;
+    }
+}
+
+/**
+ * @brief Timer callback za test komande
+ */
+static void tx_timer_handler(struct k_timer *timer)
+{
+    nrfx_err_t status;
+    
+    if (tx_busy) {
+        printk("[TX] BUSY - skipping transmission\n");
+        return;
+    }
+    
+    const char* cmd = test_commands[current_cmd_index];
+    
+    strncpy(tx_buffer, cmd, TX_BUFFER_SIZE - 1);
+    tx_buffer[TX_BUFFER_SIZE - 1] = '\0';
+    
+    printk("[TX] Sending test command: %s\n", tx_buffer);
+    
+    tx_busy = true;
+    status = nrfx_uarte_tx(&uarte_inst, (uint8_t*)tx_buffer, strlen(tx_buffer), 0);
+    if (status != NRFX_SUCCESS) {
+        printk("TX failed: 0x%08X\n", (unsigned int)status);
+        tx_busy = false;
+    }
+    
+    current_cmd_index = (current_cmd_index + 1) % (sizeof(test_commands) / sizeof(test_commands[0]));
+}
+
+K_TIMER_DEFINE(tx_timer, tx_timer_handler, NULL);
+
+/* ============================================================
+ *                    UART DRIVER - PUBLIC API
+ * ============================================================ */
+
+/**
+ * @brief Inicijalizuje UART modul
+ */
 int uart_init(void)
 {
-	LOG_DBG("uart_init: starting");
+    nrfx_err_t status;
 
-	if (!device_is_ready(uart_dev)) {
-		LOG_ERR("UART device not ready");
-		return -1;
-	}
+#if defined(__ZEPHYR__)
+    IRQ_CONNECT(NRFX_IRQ_NUMBER_GET(NRF_UARTE_INST_GET(UARTE_INST_IDX)), 
+                IRQ_PRIO_LOWEST,
+                NRFX_UARTE_INST_HANDLER_GET(UARTE_INST_IDX), 0, 0);
+    irq_enable(NRFX_IRQ_NUMBER_GET(NRF_UARTE_INST_GET(UARTE_INST_IDX)));
+#endif
 
-	LOG_INF("UART device ready");
-
-	uart_send("\r\n=================================\r\n");
-	uart_send("UART Command Interface Ready\r\n");
-	uart_send("Commands:\r\n");
-	uart_send("  SF;<freq>      - Set Frequency (1-100 Hz)\r\n");
-	uart_send("  SW;<width>     - Set Pulse Width (1-100)\r\n");
-	uart_send("  SA;<amplitude> - Set Amplitude (1-30)\r\n");
-	/* STATUS and HELP commands removed */
-	uart_send("=================================\r\n");
-
-	uart_send("=================================\r\n");
-	uart_send("NOTE: Press ENTER after typing command!\r\n> ");
-
-	k_timer_start(&uart_poll_timer, K_MSEC(5), K_MSEC(5));
-
-	LOG_INF("uart_init complete - UART polling timer started (5ms)");
-	return 0;
-}
-
-void uart_send(const char *s)
-{
-	if (!s) {
-		LOG_WRN("uart_send: null pointer");
-		return;
-	}
+    nrfx_uarte_config_t uarte_config = NRFX_UARTE_DEFAULT_CONFIG(UARTE_TX_PIN, UARTE_RX_PIN);
+    uarte_config.baudrate = NRF_UARTE_BAUDRATE_115200;
     
-	while (*s) {
-		uart_poll_out(uart_dev, *s++);
-	}
-}
+    status = nrfx_uarte_init(&uarte_inst, &uarte_config, uarte_handler);
+    if (status != NRFX_SUCCESS) {
+        printk("ERROR: UART init failed: 0x%08X\n", (unsigned int)status);
+        return -1;
+    }
+    printk("UARTE1 initialized\n");
 
-void uart_printf(const char *format, ...)
-{
-	char buffer[128];
-	va_list args;
+    memset(cmd_buffer, 0, sizeof(cmd_buffer));
+    memset(cathode_channels, 0, sizeof(cathode_channels));
     
-	va_start(args, format);
-	vsnprintf(buffer, sizeof(buffer), format, args);
-	va_end(args);
+    status = nrfx_uarte_rx(&uarte_inst, m_rx_chunk, RX_CHUNK_SIZE);
+    if (status != NRFX_SUCCESS) {
+        printk("RX start failed: 0x%08X\n", (unsigned int)status);
+        return -1;
+    }
+    printk("RX started\n");
+
+    return 0;
+}
+
+/**
+ * @brief Šalje string preko UART-a
+ */
+int uart_send(const char *data)
+{
+    nrfx_err_t status;
     
-	uart_send(buffer);
+    if (tx_busy) {
+        return -1;
+    }
+    
+    strncpy(tx_buffer, data, TX_BUFFER_SIZE - 1);
+    tx_buffer[TX_BUFFER_SIZE - 1] = '\0';
+    
+    tx_busy = true;
+    status = nrfx_uarte_tx(&uarte_inst, (uint8_t*)tx_buffer, strlen(tx_buffer), 0);
+    if (status != NRFX_SUCCESS) {
+        tx_busy = false;
+        return -1;
+    }
+    
+    return 0;
 }
 
-static void uart_process_command(const char *cmd_buffer, uint16_t len)
+/**
+ * @brief Proverava da li je TX zauzet
+ */
+bool uart_is_tx_busy(void)
 {
-	LOG_DBG("uart_process_command ENTRY: cmd='%s' len=%d", cmd_buffer ? cmd_buffer : "NULL", len);
-
-	if (len == 0) {
-		LOG_DBG("Empty command, nothing to do");
-		return;
-	}
-
-	LOG_INF("Processing command: '%s' (len=%d)", cmd_buffer, len);
-	LOG_HEXDUMP_DBG(cmd_buffer, len, "UART_CMD hex dump");
-	LOG_DBG("UART_CMD ASCII: %.*s", len, cmd_buffer);
-
-	if (strncmp(cmd_buffer, "SF;", 3) == 0) {
-		LOG_INF("SF command detected");
-		const char *num_str = &cmd_buffer[3];
-		/* Parse frequency as hexadecimal (e.g. "19" -> 0x19 == 25) */
-		int freq = (int)strtol(num_str, NULL, 16);
-
-		LOG_DBG("Parsed frequency (hex): %d", freq);
-
-		if (freq >= MIN_FREQUENCY_HZ && freq <= MAX_FREQUENCY_HZ) {
-			uint32_t max_freq = get_max_frequency(current_pulse_width);
-			if (freq > max_freq) {
-				LOG_WRN("Frequency %d Hz too high for pulse width %u", freq, current_pulse_width);
-				uart_send("\r\nERROR: Frequency too high for current pulse width\r\n");
-				uart_printf("Maximum frequency: %u Hz\r\n> ", max_freq);
-				return;
-			}
-
-			LOG_INF("Setting current_frequency_hz from %u to %d", current_frequency_hz, freq);
-			current_frequency_hz = freq;
-			parameters_updated = true;
-			LOG_DBG("parameters_updated=%d", parameters_updated);
-
-			uint32_t pause = frequency_to_pause_ms(freq);
-			LOG_INF("Frequency set to %d Hz (pause: %u ms)", freq, pause);
-			uart_printf("\r\nOK: Frequency set to %d Hz (pause: %u ms)\r\n> ", freq, pause);
-		} else {
-			LOG_WRN("Frequency %d OUT OF RANGE [%d-%d]", freq, MIN_FREQUENCY_HZ, MAX_FREQUENCY_HZ);
-			uart_printf("\r\nERROR: Frequency out of range [%d-%d]\r\n> ", MIN_FREQUENCY_HZ, MAX_FREQUENCY_HZ);
-		}
-	} else if (strncmp(cmd_buffer, "SW;", 3) == 0) {
-		LOG_INF("SW command detected");
-		/* Parse pulse width as hexadecimal (e.g. "0A" -> 10) */
-		int width = (int)strtol(&cmd_buffer[3], NULL, 16);
-		LOG_DBG("Parsed pulse width (hex): %d", width);
-
-		if (width >= MIN_PULSE_WIDTH && width <= MAX_PULSE_WIDTH) {
-			uint32_t max_freq_new = get_max_frequency(width);
-			if (current_frequency_hz > max_freq_new) {
-				LOG_WRN("Pulse width %d reduces max frequency to %u Hz", width, max_freq_new);
-				uart_printf("\r\nWARNING: Frequency auto-adjusted to %u Hz\r\n", max_freq_new);
-				current_frequency_hz = max_freq_new;
-			}
-
-			LOG_INF("Setting current_pulse_width from %u to %d", current_pulse_width, width);
-			current_pulse_width = width;
-			parameters_updated = true;
-			LOG_INF("Pulse width set to %d (%d µs), max freq: %u Hz", width, width * 100, max_freq_new);
-			uart_printf("\r\nOK: Pulse width set to %d (%d µs)\r\n> ", width, width * 100);
-		} else {
-			LOG_WRN("Pulse width %d out of range [%d-%d]", width, MIN_PULSE_WIDTH, MAX_PULSE_WIDTH);
-			uart_printf("\r\nERROR: Pulse width out of range [%d-%d]\r\n> ", MIN_PULSE_WIDTH, MAX_PULSE_WIDTH);
-		}
-	} else if (strncmp(cmd_buffer, "SA;", 3) == 0) {
-		LOG_INF("SA command detected");
-		/* Parse amplitude as hexadecimal (e.g. "19" -> 25) */
-		int amplitude = (int)strtol(&cmd_buffer[3], NULL, 16);
-		LOG_DBG("Parsed amplitude (hex): %d", amplitude);
-
-		if (amplitude >= 1 && amplitude <= 30) {
-			uint16_t dac_value = (uint16_t)((amplitude * 85u) / 10u);
-			dac_set_value(dac_value);
-			LOG_INF("Amplitude set to %d (DAC: %u)", amplitude, dac_value);
-			uart_printf("\r\nOK: Amplitude set to %d (DAC: %u)\r\n> ", amplitude, dac_value);
-		} else {
-			LOG_WRN("Amplitude %d out of range [1-30]", amplitude);
-			uart_send("\r\nERROR: Amplitude out of range [1-30]\r\n> ");
-		}
-	/* STATUS and HELP command handling removed */
-	/* Removed commands will fall through to unknown-command handling */
-	} else {
-		LOG_WRN("Unknown command: '%s'", cmd_buffer);
-		uart_send("\r\nERROR: Unknown command.\r\n> ");
-	}
-
-	LOG_INF("Command processing complete");
+    return tx_busy;
 }
 
-static void uart_timer_callback(struct k_timer *timer)
+/**
+ * @brief Pokreće test timer
+ */
+void uart_start_test_timer(uint32_t interval_ms)
 {
-	ARG_UNUSED(timer);
-	uart_rx_process();
+    k_timer_start(&tx_timer, K_MSEC(interval_ms), K_MSEC(interval_ms));
+    printk("TX test timer started (%d ms interval)\n", interval_ms);
 }
 
-void uart_rx_process(void)
+/**
+ * @brief Zaustavlja test timer
+ */
+void uart_stop_test_timer(void)
 {
-	uint8_t c;
-	static uint32_t char_count = 0;
-	int poll_result;
-
-	poll_result = uart_poll_in(uart_dev, &c);
-
-	/* Process only one character per call */
-	if (poll_result == 0) {
-		char_count++;
-
-		LOG_DBG("RX char #%u: 0x%02X ('%c'), buffer_len=%d", char_count, c, 
-				(c >= 32 && c < 127) ? c : '.', uart_len);
-
-		uart_poll_out(uart_dev, c); /* echo */
-
-		if (c == '\r' || c == '\n') {
-			LOG_DBG("ENTER/NEWLINE detected (0x%02X), buffer_len=%d", c, uart_len);
-
-			if (uart_len > 0) {
-				uart_buf[uart_len] = '\0';
-				LOG_INF("Calling uart_process_command; buf_len=%d", uart_len);
-				LOG_DBG("Buffer content: %.*s", uart_len, uart_buf);
-				uart_process_command(uart_buf, uart_len);
-				LOG_DBG("Back from uart_process_command");
-				uart_len = 0;
-				LOG_DBG("Buffer cleared, uart_len=0");
-			} else {
-				LOG_DBG("Empty buffer, ignoring Enter");
-			}
-		} else if (c == 0x08 || c == 0x7F) {
-			if (uart_len > 0) {
-				uart_len--;
-				uart_send("\b \b"); /* erase character */
-				LOG_DBG("Backspace, new_len=%d", uart_len);
-			}
-		} else if (uart_len < UART_BUF_SIZE - 1) {
-			uart_buf[uart_len] = c;
-			uart_len++;
-			LOG_DBG("Added to buffer[%d] = 0x%02X ('%c'), new_len=%d", 
-					uart_len-1, c, c, uart_len);
-		} else {
-			LOG_WRN("Buffer full! Ignoring character 0x%02X", c);
-		}
-
-		last_rx_time = k_uptime_get();
-	}
+    k_timer_stop(&tx_timer);
+    printk("TX test timer stopped\n");
 }
+
+/* ============================================================
+ *                    PARAMETER GETTERS
+ * ============================================================ */
 
 uint32_t uart_get_pause_time_ms(void)
 {

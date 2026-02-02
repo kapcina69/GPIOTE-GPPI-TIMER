@@ -65,6 +65,7 @@ typedef enum {
 
 static volatile state_t current_state = STATE_PULSE_1;
 static volatile uint32_t state_transitions = 0;
+static volatile bool system_running = true;
 
 /**
  * @brief State machine timer handler with DUAL CC channels
@@ -74,6 +75,11 @@ static volatile uint32_t state_transitions = 0;
  */
 static void state_timer_handler(nrf_timer_event_t event_type, void * p_context)
 {
+    // If system is stopped, ignore all events
+    if (!system_running) {
+        return;
+    }
+    
     uint32_t pulse_us = uart_get_pulse_width_ms() * 100;
     uint32_t single_pulse_us = pulse_us * 2 + PULSE_OVERHEAD_US;
     
@@ -387,4 +393,47 @@ void timer_get_instances(nrfx_timer_t **pulse, nrfx_timer_t **state)
 uint32_t timer_get_transition_count(void)
 {
     return state_transitions;
+}
+
+void timer_system_stop(void)
+{
+    system_running = false;
+    
+    // Disable both timers
+    nrfx_timer_disable(&timer_pulse);
+    nrfx_timer_disable(&timer_state);
+    
+    // Set MUX to off/pause pattern
+    mux_write(MUX_PATTERN_PAUSE);
+}
+
+void timer_system_start(void)
+{
+    if (system_running) {
+        return;  // Already running
+    }
+    
+    system_running = true;
+    
+    // Reset state machine to beginning
+    current_state = STATE_PULSE_1;
+    
+    // Pre-load MUX for first pulse
+    mux_write(mux_patterns[0]);
+    
+    // Get current pulse width
+    uint32_t pulse_us = uart_get_pulse_width_ms() * 100;
+    uint32_t single_pulse_us = pulse_us * 2 + PULSE_OVERHEAD_US;
+    
+    // Re-enable pulse timer
+    nrfx_timer_clear(&timer_pulse);
+    nrfx_timer_enable(&timer_pulse);
+    
+    // Configure and enable state timer for first pulse
+    timer_set_state_pulse(single_pulse_us);
+}
+
+bool timer_system_is_running(void)
+{
+    return system_running;
 }

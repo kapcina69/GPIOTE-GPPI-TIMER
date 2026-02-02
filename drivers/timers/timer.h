@@ -80,4 +80,27 @@ void timer_get_instances(nrfx_timer_t **pulse, nrfx_timer_t **state);
  */
 uint32_t timer_get_transition_count(void);
 
+/**
+ * @brief Stop the entire pulse generation system
+ * 
+ * Disables both pulse and state timers, sets MUX to off pattern.
+ * System can be restarted with timer_system_start().
+ */
+void timer_system_stop(void);
+
+/**
+ * @brief Start/restart the pulse generation system
+ * 
+ * Re-enables timers and restarts from STATE_PULSE_1.
+ * Must be called after timer_init() has been executed.
+ */
+void timer_system_start(void);
+
+/**
+ * @brief Check if system is currently running
+ * 
+ * @return true if system is running, false if stopped
+ */
+bool timer_system_is_running(void);
+
 #endif // TIMER_H
