@@ -137,7 +137,7 @@ int main(void)
     NRFX_LOG_INFO("=== DUAL CC CHANNEL CONFIGURATION ===");
     NRFX_LOG_INFO("State timer CC0: State transition");
     NRFX_LOG_INFO("State timer CC1: MUX pre-load (%d us advance)", MUX_ADVANCE_TIME_US);
-    NRFX_LOG_INFO("Expected: 8 MUX writes per cycle (1 per pulse)");
+    NRFX_LOG_INFO("Pulse count: %d (LED1 only mode)", NUM_PULSES_PER_CYCLE);
     NRFX_LOG_INFO("=====================================");
 
     while (1) {

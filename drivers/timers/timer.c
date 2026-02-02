@@ -8,6 +8,10 @@
  * - CC_CHANNEL0: State transition event (main timing)
  * - CC_CHANNEL1: MUX pre-load event (MUX_ADVANCE_TIME_US before state transition)
  * 
+ * NEW MODE: 16 pulses per cycle (configurable)
+ * - LED1 toggles for all pulses
+ * - LED2 is HIGH during pulse sequence, LOW during pause
+ * 
  * This ensures MUX pattern arrives BEFORE the pulse starts!
  */
 
@@ -16,15 +20,18 @@
 #include "uart.h"
 #include "../../config.h"
 #include "../mux/mux.h"
+#include "../gpiote/gpiote.h"
 #include <nrfx_example.h>
 #include <zephyr/kernel.h>
+#include <hal/nrf_gpio.h>
 
 // Timer instances
 static nrfx_timer_t timer_pulse = NRFX_TIMER_INSTANCE(TIMER_PULSE_IDX);
 static nrfx_timer_t timer_state = NRFX_TIMER_INSTANCE(TIMER_STATE_IDX);
 
-// MUX patterns for 8 pulses (one pattern per pulse)
-static const uint16_t mux_patterns[8] = {
+// MUX patterns for 16 pulses (one pattern per pulse)
+// Can be modified via SC command - patterns with value 0 are skipped
+static uint16_t mux_patterns[MAX_PULSES_PER_CYCLE] = {
     MUX_PATTERN_PULSE_1,
     MUX_PATTERN_PULSE_2,
     MUX_PATTERN_PULSE_3,
@@ -32,38 +39,56 @@ static const uint16_t mux_patterns[8] = {
     MUX_PATTERN_PULSE_5,
     MUX_PATTERN_PULSE_6,
     MUX_PATTERN_PULSE_7,
-    MUX_PATTERN_PULSE_8
+    MUX_PATTERN_PULSE_8,
+    MUX_PATTERN_PULSE_9,
+    MUX_PATTERN_PULSE_10,
+    MUX_PATTERN_PULSE_11,
+    MUX_PATTERN_PULSE_12,
+    MUX_PATTERN_PULSE_13,
+    MUX_PATTERN_PULSE_14,
+    MUX_PATTERN_PULSE_15,
+    MUX_PATTERN_PULSE_16
 };
 
-/* DAC values corresponding to each pulse (PULSE_1..PULSE_8)
+/* DAC values corresponding to each pulse (PULSE_1..PULSE_16)
  * These values will be applied before the corresponding pulse
  * (pre-load) so DAC output is ready when the pulse starts.
+ * 
+ * Can be modified via SA command.
+ * Default: Linear ramp from 200 to 4000 across 16 pulses
  */
-static const uint16_t dac_values[8] = {
-    500,  /* PULSE_1 */
-    800,  /* PULSE_2 */
-    1200, /* PULSE_3 */
-    1600, /* PULSE_4 */
-    2000, /* PULSE_5 */
-    2400, /* PULSE_6 */
-    2800, /* PULSE_7 */
-    3200  /* PULSE_8 */
+static uint16_t dac_values[MAX_PULSES_PER_CYCLE] = {
+    200,   /* PULSE_1 */
+    450,   /* PULSE_2 */
+    700,   /* PULSE_3 */
+    950,   /* PULSE_4 */
+    1200,  /* PULSE_5 */
+    1450,  /* PULSE_6 */
+    1700,  /* PULSE_7 */
+    1950,  /* PULSE_8 */
+    2200,  /* PULSE_9 */
+    2450,  /* PULSE_10 */
+    2700,  /* PULSE_11 */
+    2950,  /* PULSE_12 */
+    3200,  /* PULSE_13 */
+    3450,  /* PULSE_14 */
+    3700,  /* PULSE_15 */
+    4000   /* PULSE_16 */
 };
 
-// State machine
+// Current number of active pulses (can be changed via SC command)
+static volatile uint8_t active_pulse_count = NUM_PULSES_PER_CYCLE;
+
+// Current pulse index (0 to active_pulse_count-1)
+static volatile uint8_t current_pulse_idx = 0;
+
+// State machine - simplified: PULSE or PAUSE
 typedef enum {
-    STATE_PULSE_1,
-    STATE_PULSE_2,
-    STATE_PULSE_3,
-    STATE_PULSE_4,
-    STATE_PULSE_5,
-    STATE_PULSE_6,
-    STATE_PULSE_7,
-    STATE_PULSE_8,
+    STATE_PULSE,
     STATE_PAUSE
 } state_t;
 
-static volatile state_t current_state = STATE_PULSE_1;
+static volatile state_t current_state = STATE_PULSE;
 static volatile uint32_t state_transitions = 0;
 static volatile bool system_running = true;
 
@@ -72,6 +97,8 @@ static volatile bool system_running = true;
  * 
  * CC_CHANNEL0: State transition (main event)
  * CC_CHANNEL1: MUX pre-load (early event, MUX_ADVANCE_TIME_US before CC0)
+ * 
+ * NEW: Simplified state machine with configurable pulse count (1-16)
  */
 static void state_timer_handler(nrf_timer_event_t event_type, void * p_context)
 {
@@ -81,76 +108,32 @@ static void state_timer_handler(nrf_timer_event_t event_type, void * p_context)
     }
     
     uint32_t pulse_us = uart_get_pulse_width_ms() * 100;
-    uint32_t single_pulse_us = pulse_us * 2 + PULSE_OVERHEAD_US;
+    uint32_t single_pulse_us = pulse_us + PULSE_OVERHEAD_US;
     
     // ========== CC_CHANNEL1: MUX PRE-LOAD EVENT ==========
     if (event_type == NRF_TIMER_EVENT_COMPARE1) {
-        // Send MUX pattern for NEXT state (before state actually transitions)
-        switch(current_state) {
-            case STATE_PULSE_1:
-                /* Pre-load for PULSE_2 */
-                mux_write(mux_patterns[1]);
-                #if ENABLE_DAC_PRELOAD
-                    dac_set_value(dac_values[1]);
-                #endif
-                break;
-            case STATE_PULSE_2:
-                /* Pre-load for PULSE_3 */
-                mux_write(mux_patterns[2]);
-                #if ENABLE_DAC_PRELOAD
-                    dac_set_value(dac_values[2]);
-                #endif
-                break;
-            case STATE_PULSE_3:
-                /* Pre-load for PULSE_4 */
-                mux_write(mux_patterns[3]);
-                #if ENABLE_DAC_PRELOAD
-                    dac_set_value(dac_values[3]);
-                #endif
-                break;
-            case STATE_PULSE_4:
-                /* Pre-load for PULSE_5 */
-                mux_write(mux_patterns[4]);
-                #if ENABLE_DAC_PRELOAD
-                    dac_set_value(dac_values[4]);
-                #endif
-                break;
-            case STATE_PULSE_5:
-                /* Pre-load for PULSE_6 */
-                mux_write(mux_patterns[5]);
-                #if ENABLE_DAC_PRELOAD
-                    dac_set_value(dac_values[5]);
-                #endif
-                break;
-            case STATE_PULSE_6:
-                /* Pre-load for PULSE_7 */
-                mux_write(mux_patterns[6]);
-                #if ENABLE_DAC_PRELOAD
-                    dac_set_value(dac_values[6]);
-                #endif
-                break;
-            case STATE_PULSE_7:
-                /* Pre-load for PULSE_8 */
-                mux_write(mux_patterns[7]);
-                #if ENABLE_DAC_PRELOAD
-                    dac_set_value(dac_values[7]);
-                #endif
-                break;
-            case STATE_PULSE_8:
-                /* Pre-load for PAUSE (all off) */
+        if (current_state == STATE_PULSE) {
+            // Pre-load MUX pattern for NEXT pulse
+            uint8_t next_idx = current_pulse_idx + 1;
+            if (next_idx >= active_pulse_count) {
+                // Next state is PAUSE - pre-load pause pattern
                 mux_write(MUX_PATTERN_PAUSE);
                 #if ENABLE_DAC_PRELOAD
-                    /* Set DAC to 0 during pause */
                     dac_set_value(0);
                 #endif
-                break;
-            case STATE_PAUSE:
-                /* Pre-load for PULSE_1 (restart) */
-                mux_write(mux_patterns[0]);
+            } else {
+                // Pre-load next pulse pattern
+                mux_write(mux_patterns[next_idx]);
                 #if ENABLE_DAC_PRELOAD
-                    dac_set_value(dac_values[0]);
+                    dac_set_value(dac_values[next_idx]);
                 #endif
-                break;
+            }
+        } else if (current_state == STATE_PAUSE) {
+            // Pre-load for first pulse (restart cycle)
+            mux_write(mux_patterns[0]);
+            #if ENABLE_DAC_PRELOAD
+                dac_set_value(dac_values[0]);
+            #endif
         }
         return;  // Only send pattern, don't change state
     }
@@ -162,7 +145,7 @@ static void state_timer_handler(nrf_timer_event_t event_type, void * p_context)
     
     state_transitions++;
     
-    // Check UART parameter updates (UART provides the parameter API)
+    // Check UART parameter updates
     if (uart_parameters_updated()) {
         uart_clear_update_flag();
 
@@ -180,61 +163,38 @@ static void state_timer_handler(nrf_timer_event_t event_type, void * p_context)
                                     pulse_ticks * 2 + 30,
                                     NRF_TIMER_SHORT_COMPARE5_CLEAR_MASK, false);
         
-        if (current_state >= STATE_PULSE_1 && current_state <= STATE_PULSE_8) {
+        if (current_state == STATE_PULSE) {
             nrfx_timer_enable(&timer_pulse);
         }
     }
     
     // State transitions
-    switch(current_state) {
-        case STATE_PULSE_1:
-        case STATE_PULSE_2:
-        case STATE_PULSE_3:
-        case STATE_PULSE_4:
-        case STATE_PULSE_5:
-        case STATE_PULSE_6:
-        case STATE_PULSE_7: {
-            // Move to next pulse state
-            nrfx_timer_clear(&timer_pulse);
-            current_state = (state_t)(current_state + 1);
-            
-            nrfx_timer_disable(&timer_state);
-            nrfx_timer_clear(&timer_state);
-            uint32_t pulse_ticks = nrfx_timer_us_to_ticks(&timer_state, single_pulse_us);
-            
-            // Setup CC0 for state transition
-            nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL0, pulse_ticks, true);
-            
-            // Setup CC1 for MUX pre-load (ADVANCE_TIME before CC0)
-            uint32_t advance_ticks = nrfx_timer_us_to_ticks(&timer_state, MUX_ADVANCE_TIME_US);
-            uint32_t mux_ticks = (pulse_ticks > advance_ticks) ? 
-                                 (pulse_ticks - advance_ticks) : 
-                                 (pulse_ticks / 2);
-            nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL1, mux_ticks, true);
-            
-            nrfx_timer_enable(&timer_state);
-            break;
-        }
+    if (current_state == STATE_PULSE) {
+        current_pulse_idx++;
         
-        case STATE_PULSE_8: {
-            // After 8th pulse, go to PAUSE
+        if (current_pulse_idx >= active_pulse_count) {
+            // All pulses done, go to PAUSE
             nrfx_timer_disable(&timer_pulse);
             current_state = STATE_PAUSE;
+            current_pulse_idx = 0;
             
+            // LED2 goes LOW during pause
+            nrf_gpio_pin_clear(OUTPUT_PIN_2);
+            
+            // Calculate pause duration
             uint32_t freq_hz = uart_get_frequency_hz();
-            uint32_t active_period_us = single_pulse_us * 8;
+            uint32_t active_period_us = single_pulse_us * active_pulse_count;
             uint32_t total_period_us = 1000000 / freq_hz;
             uint32_t pause_us = (total_period_us > active_period_us) ? 
                                (total_period_us - active_period_us) : 0;
             
+            // Setup state timer for pause
             nrfx_timer_disable(&timer_state);
             nrfx_timer_clear(&timer_state);
             uint32_t pause_ticks = nrfx_timer_us_to_ticks(&timer_state, pause_us);
             
-            // Setup CC0 for state transition
             nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL0, pause_ticks, true);
             
-            // Setup CC1 for MUX pre-load
             uint32_t advance_ticks = nrfx_timer_us_to_ticks(&timer_state, MUX_ADVANCE_TIME_US);
             uint32_t mux_ticks = (pause_ticks > advance_ticks) ? 
                                  (pause_ticks - advance_ticks) : 
@@ -242,22 +202,16 @@ static void state_timer_handler(nrf_timer_event_t event_type, void * p_context)
             nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL1, mux_ticks, true);
             
             nrfx_timer_enable(&timer_state);
-            break;
-        }
-        
-        case STATE_PAUSE: {
-            // After PAUSE, back to PULSE_1
-            nrfx_timer_enable(&timer_pulse);
-            current_state = STATE_PULSE_1;
+        } else {
+            // Continue with next pulse
+            nrfx_timer_clear(&timer_pulse);
             
             nrfx_timer_disable(&timer_state);
             nrfx_timer_clear(&timer_state);
             uint32_t pulse_ticks = nrfx_timer_us_to_ticks(&timer_state, single_pulse_us);
             
-            // Setup CC0 for state transition
             nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL0, pulse_ticks, true);
             
-            // Setup CC1 for MUX pre-load
             uint32_t advance_ticks = nrfx_timer_us_to_ticks(&timer_state, MUX_ADVANCE_TIME_US);
             uint32_t mux_ticks = (pulse_ticks > advance_ticks) ? 
                                  (pulse_ticks - advance_ticks) : 
@@ -265,8 +219,29 @@ static void state_timer_handler(nrf_timer_event_t event_type, void * p_context)
             nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL1, mux_ticks, true);
             
             nrfx_timer_enable(&timer_state);
-            break;
         }
+    } else if (current_state == STATE_PAUSE) {
+        // After PAUSE, restart with first pulse
+        nrfx_timer_enable(&timer_pulse);
+        current_state = STATE_PULSE;
+        current_pulse_idx = 0;
+        
+        // LED2 goes HIGH during pulse sequence
+        nrf_gpio_pin_set(OUTPUT_PIN_2);
+        
+        nrfx_timer_disable(&timer_state);
+        nrfx_timer_clear(&timer_state);
+        uint32_t pulse_ticks = nrfx_timer_us_to_ticks(&timer_state, single_pulse_us);
+        
+        nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL0, pulse_ticks, true);
+        
+        uint32_t advance_ticks = nrfx_timer_us_to_ticks(&timer_state, MUX_ADVANCE_TIME_US);
+        uint32_t mux_ticks = (pulse_ticks > advance_ticks) ? 
+                             (pulse_ticks - advance_ticks) : 
+                             (pulse_ticks / 2);
+        nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL1, mux_ticks, true);
+        
+        nrfx_timer_enable(&timer_state);
     }
 }
 
@@ -405,6 +380,9 @@ void timer_system_stop(void)
     
     // Set MUX to off/pause pattern
     mux_write(MUX_PATTERN_PAUSE);
+    
+    // LED2 LOW when system stopped
+    nrf_gpio_pin_clear(OUTPUT_PIN_2);
 }
 
 void timer_system_start(void)
@@ -416,14 +394,18 @@ void timer_system_start(void)
     system_running = true;
     
     // Reset state machine to beginning
-    current_state = STATE_PULSE_1;
+    current_state = STATE_PULSE;
+    current_pulse_idx = 0;
+    
+    // LED2 HIGH during pulse sequence
+    nrf_gpio_pin_set(OUTPUT_PIN_2);
     
     // Pre-load MUX for first pulse
     mux_write(mux_patterns[0]);
     
     // Get current pulse width
     uint32_t pulse_us = uart_get_pulse_width_ms() * 100;
-    uint32_t single_pulse_us = pulse_us * 2 + PULSE_OVERHEAD_US;
+    uint32_t single_pulse_us = pulse_us + PULSE_OVERHEAD_US;
     
     // Re-enable pulse timer
     nrfx_timer_clear(&timer_pulse);
@@ -436,4 +418,90 @@ void timer_system_start(void)
 bool timer_system_is_running(void)
 {
     return system_running;
+}
+
+void timer_set_pulse_count(uint8_t count)
+{
+    if (count >= 1 && count <= MAX_PULSES_PER_CYCLE) {
+        active_pulse_count = count;
+    }
+}
+
+uint8_t timer_get_pulse_count(void)
+{
+    return active_pulse_count;
+}
+
+void timer_set_mux_patterns(const uint16_t *patterns, uint8_t count)
+{
+    if (count > MAX_PULSES_PER_CYCLE) {
+        count = MAX_PULSES_PER_CYCLE;
+    }
+    
+    // Copy patterns and count non-zero ones
+    uint8_t non_zero_count = 0;
+    for (uint8_t i = 0; i < MAX_PULSES_PER_CYCLE; i++) {
+        if (i < count) {
+            mux_patterns[i] = patterns[i];
+            if (patterns[i] != 0) {
+                non_zero_count = i + 1;  // Last non-zero index + 1
+            }
+        } else {
+            mux_patterns[i] = 0;
+        }
+    }
+    
+    // Set active pulse count to number of consecutive non-zero patterns from start
+    // Actually, count all until we hit the last non-zero
+    active_pulse_count = (non_zero_count > 0) ? non_zero_count : 1;
+}
+
+uint16_t timer_get_mux_pattern(uint8_t index)
+{
+    if (index < MAX_PULSES_PER_CYCLE) {
+        return mux_patterns[index];
+    }
+    return 0;
+}
+
+void timer_set_dac_values(const uint16_t *values, uint8_t count)
+{
+    if (count > MAX_PULSES_PER_CYCLE) {
+        count = MAX_PULSES_PER_CYCLE;
+    }
+    
+    // Copy DAC values - does NOT affect active_pulse_count
+    for (uint8_t i = 0; i < MAX_PULSES_PER_CYCLE; i++) {
+        if (i < count) {
+            dac_values[i] = values[i];
+        }
+        // Values beyond count remain unchanged
+    }
+}
+
+uint16_t timer_get_dac_value(uint8_t index)
+{
+    if (index < MAX_PULSES_PER_CYCLE) {
+        return dac_values[index];
+    }
+    return 0;
+}
+
+uint32_t timer_get_single_pulse_us(void)
+{
+    uint32_t pulse_us = uart_get_pulse_width_ms() * 100;
+    return pulse_us + PULSE_OVERHEAD_US;
+}
+
+uint32_t timer_get_active_time_us(void)
+{
+    return timer_get_single_pulse_us() * active_pulse_count;
+}
+
+uint32_t timer_get_max_frequency_hz(void)
+{
+    uint32_t active_time_us = timer_get_active_time_us();
+    // Dodaj minimalnu pauzu od 100us
+    uint32_t min_period_us = active_time_us + 100;
+    return 1000000U / min_period_us;
 }

@@ -67,28 +67,31 @@ static uint16_t cathode_channels[16] = {0};
 // Test komande za periodično slanje
 static const char* test_commands[] = {
     ">SON<",
-    ">PW;a<",
-    ">SOFF<",
-    ">PW;1<",
-    ">SON<",
-    ">SA;0064<",
-    ">SF;19<",
-    ">SON<",
-    ">PW;1<",
-    ">PW;3<",
-    ">PW;7<",
-    ">PW;10<",
-    ">SA;32<",
-    ">SA;C8<",
-    ">SA;2C<",
-    ">SF;A<",
-    ">SF;32<",
-    ">SF;50<",
-    ">SON<",
-    ">SOFF<",
-    ">PW;8<",
-    ">SA;FA<",
-    ">SF;64<"
+    ">SA;0000 0200 0400 0600 0800 0A00<",
+    ">SC;0100 0004 4000 0020 0001 0800 0008 2000 0002 1000 0040 8000 0010 0200 0008 0400<",
+    ">SC;0001 0002<",
+    ">PW;a<"
+    // ">SOFF<",
+    // ">PW;1<",
+    // ">SON<",
+    // ">SA;0064<",
+    // ">SF;19<",
+    // ">SON<",
+    // ">PW;1<",
+    // ">PW;3<",
+    // ">PW;7<",
+    // ">PW;10<",
+    // ">SA;32<",
+    // ">SA;C8<",
+    // ">SA;2C<",
+    // ">SF;A<",
+    // ">SF;32<",
+    // ">SF;50<",
+    // ">SON<",
+    // ">SOFF<",
+    // ">PW;8<",
+    // ">SA;FA<",
+    // ">SF;64<"
 };
 static uint8_t current_cmd_index = 0;
 
@@ -161,26 +164,25 @@ uint32_t frequency_to_pause_ms(uint32_t freq_hz)
 		return 1000;
 	}
 
-	uint32_t period_ms = 1000 / freq_hz;
-	uint32_t active_ms = CALCULATE_ACTIVE_TIME_US(current_pulse_width) / 1000;
-	uint32_t result = (period_ms > active_ms) ? (period_ms - active_ms) : 0;
+	uint32_t period_us = 1000000 / freq_hz;
+	uint32_t active_us = timer_get_active_time_us();
+	uint32_t pause_us = (period_us > active_us) ? (period_us - active_us) : 0;
+	uint32_t result = pause_us / 1000;
 
-	LOG_DBG("frequency_to_pause_ms: period=%u ms, active=%u ms, pause=%u ms", 
-			period_ms, active_ms, result);
+	LOG_DBG("frequency_to_pause_ms: period=%u us, active=%u us (pulses=%u), pause=%u ms", 
+			period_us, active_us, timer_get_pulse_count(), result);
 
 	return result;
 }
 
 uint32_t get_max_frequency(uint32_t pulse_width)
 {
-	LOG_DBG("get_max_frequency(width=%u)", pulse_width);
-
-	uint32_t active_time_us = CALCULATE_ACTIVE_TIME_US(pulse_width);
-	uint32_t period_us = active_time_us + 100;
-	uint32_t result = 1000000 / period_us;
-
-	LOG_DBG("get_max_frequency: active=%u us, period=%u us, max_freq=%u Hz", 
-			active_time_us, period_us, result);
+	(void)pulse_width;  // Sada koristimo aktuelne parametre iz timer modula
+	
+	uint32_t result = timer_get_max_frequency_hz();
+	
+	LOG_DBG("get_max_frequency: active=%u us, pulses=%u, max_freq=%u Hz", 
+			timer_get_active_time_us(), timer_get_pulse_count(), result);
 
 	return result;
 }
@@ -253,27 +255,56 @@ static void handle_pw(const char *args)
 }
 
 /**
- * @brief Handler za SA komandu - postavlja amplitudu napona
- * @param args HEX string vrednost (1-30)
+ * @brief Handler za SA komandu - postavlja DAC vrednosti za svaki puls
+ * @param args Space-separated HEX values (up to 16 DAC values)
+ * 
+ * Format: SA;00C8 01C2 02BC 03B6 ...  (hex DAC values 0-4095)
+ * Each value is a 12-bit DAC value (0x0000 to 0x0FFF).
+ * Unlike SC, this does NOT affect the number of active pulses.
  */
 static void handle_sa(const char *args)
 {
-    LOG_INF("SA command detected");
+    uint16_t values[16] = {0};
+    uint8_t count = 0;
+    const char *ptr = args;
     
-    int amplitude = (int)strtol(args, NULL, 16);
-    LOG_DBG("Parsed amplitude (hex): %d", amplitude);
+    LOG_INF("SA command: parsing DAC values");
     
-    if (amplitude >= 1 && amplitude <= 30) {
-        // DAC formula: 8.5 LSB per unit amplitude (255 / 30 ≈ 8.5)
-        uint16_t dac_value = (uint16_t)((amplitude * 85u) / 10u);
-        voltage_amplitude = (float)amplitude;
-        dac_set_value(dac_value);
-        LOG_INF("Amplitude set to %d (DAC: %u)", amplitude, dac_value);
-        uart_send_response("SAOK");
-    } else {
-        LOG_WRN("Amplitude %d out of range [1-30]", amplitude);
-        uart_send_response("SAERR");
+    // Parse up to 16 hex values separated by spaces
+    while (*ptr && count < 16) {
+        // Skip leading spaces
+        while (*ptr == ' ') ptr++;
+        if (*ptr == '\0') break;
+        
+        // Parse hex value
+        char *end;
+        uint32_t val = strtoul(ptr, &end, 16);
+        
+        if (end == ptr) {
+            // No valid number found
+            break;
+        }
+        
+        // Limit to 12-bit DAC range (0-4095)
+        values[count] = (uint16_t)(val & 0x0FFF);
+        LOG_DBG("DAC[%d] = %u (0x%03X)", count, values[count], values[count]);
+        count++;
+        ptr = end;
     }
+    
+    if (count == 0) {
+        LOG_WRN("SA: No DAC values parsed");
+        uart_send_response("SAERR");
+        return;
+    }
+    
+    // Apply DAC values to timer (does NOT change pulse count)
+    timer_set_dac_values(values, count);
+    
+    LOG_INF("SA: Set %d DAC values", count);
+    printk("    Action: Set %d DAC values\n", count);
+    
+    uart_send_response("SAOK");
 }
 
 /**
@@ -306,15 +337,56 @@ static void handle_sf(const char *args)
 }
 
 /**
- * @brief Handler za SC komandu - postavlja katodne kanale
- * @param args HEX string sa vrednostima kanala
+ * @brief Handler za SC komandu - postavlja MUX patterne
+ * @param args Space-separated HEX values (up to 16 patterns)
+ * 
+ * Format: SC;0100 0004 4000 0020 0001 0800 ...
+ * Each value is a 16-bit hex MUX pattern.
+ * Patterns with value 0x0000 indicate end of sequence.
+ * Number of non-zero patterns determines pulse count.
  */
 static void handle_sc(const char *args)
 {
-    (void)args;  // TODO: Implementirati parsiranje kanala
+    uint16_t patterns[16] = {0};
+    uint8_t count = 0;
+    const char *ptr = args;
     
-    printk("    Action: Set Cathode Channels\n");
-    // Implementacija za parsiranje kanala može se dodati ovde
+    LOG_INF("SC command: parsing patterns");
+    
+    // Parse up to 16 hex values separated by spaces
+    while (*ptr && count < 16) {
+        // Skip leading spaces
+        while (*ptr == ' ') ptr++;
+        if (*ptr == '\0') break;
+        
+        // Parse hex value
+        char *end;
+        uint32_t val = strtoul(ptr, &end, 16);
+        
+        if (end == ptr) {
+            // No valid number found
+            break;
+        }
+        
+        patterns[count] = (uint16_t)(val & 0xFFFF);
+        LOG_DBG("Pattern[%d] = 0x%04X", count, patterns[count]);
+        count++;
+        ptr = end;
+    }
+    
+    if (count == 0) {
+        LOG_WRN("SC: No patterns parsed");
+        uart_send_response("SCERR");
+        return;
+    }
+    
+    // Apply patterns to timer
+    timer_set_mux_patterns(patterns, count);
+    
+    uint8_t active = timer_get_pulse_count();
+    LOG_INF("SC: Set %d patterns, active pulses: %d", count, active);
+    printk("    Action: Set %d MUX patterns, active pulses: %d\n", count, active);
+    
     uart_send_response("SCOK");
 }
 

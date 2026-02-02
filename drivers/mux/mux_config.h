@@ -36,32 +36,39 @@
  *============================================================================*/
 
 /** 
- * @brief MUX patterns for 8 sequential pulses
- * @note Each pattern is a 16-bit value sent to the MUX controller.
- *       Pattern format depends on your MUX hardware design.
- *       Default patterns use a walking bit pattern for demonstration.
- *       
- *       Customize these patterns based on your MUX routing requirements:
- *       - Pulse 1: Channel 0 (0x0101)
- *       - Pulse 2: Channel 1 (0x0202)
- *       - Pulse 3: Channel 2 (0x0404)
- *       - Pulse 4: Channel 3 (0x0808)
- *       - Pulse 5: Channel 4 (0x1010)
- *       - Pulse 6: Channel 5 (0x2020)
- *       - Pulse 7: Channel 6 (0x4040)
- *       - Pulse 8: Channel 7 (0x8080)
+ * @brief Maximum number of pulses per cycle
+ * @note Default is 16 pulses per cycle. Can be reduced via SC command.
+ *       In the new mode, LED1 (PIN1) toggles for all pulses while LED2 (PIN2) 
+ *       stays low during the entire sequence.
  */
-#define MUX_PATTERN_PULSE_1  0x0101
-#define MUX_PATTERN_PULSE_2  0x0202
-#define MUX_PATTERN_PULSE_3  0x0404
-#define MUX_PATTERN_PULSE_4  0x0808
-#define MUX_PATTERN_PULSE_5  0x1010
-#define MUX_PATTERN_PULSE_6  0x2020
-#define MUX_PATTERN_PULSE_7  0x4040
-#define MUX_PATTERN_PULSE_8  0x8080
+#define MAX_PULSES_PER_CYCLE 16
+
+/** 
+ * @brief MUX patterns for 16 sequential pulses
+ * @note Each pattern is a 16-bit value sent to the MUX controller.
+ *       Each bit corresponds to a MUX channel (bit 0 = channel 1, etc.)
+ *       Default: Walking bit pattern - each pulse activates different channel
+ *       Can be changed via SC command at runtime.
+ */
+#define MUX_PATTERN_PULSE_1   0x0001  /* Channel 1 */
+#define MUX_PATTERN_PULSE_2   0x0002  /* Channel 2 */
+#define MUX_PATTERN_PULSE_3   0x0004  /* Channel 3 */
+#define MUX_PATTERN_PULSE_4   0x0008  /* Channel 4 */
+#define MUX_PATTERN_PULSE_5   0x0010  /* Channel 5 */
+#define MUX_PATTERN_PULSE_6   0x0020  /* Channel 6 */
+#define MUX_PATTERN_PULSE_7   0x0040  /* Channel 7 */
+#define MUX_PATTERN_PULSE_8   0x0080  /* Channel 8 */
+#define MUX_PATTERN_PULSE_9   0x0100  /* Channel 9 */
+#define MUX_PATTERN_PULSE_10  0x0200  /* Channel 10 */
+#define MUX_PATTERN_PULSE_11  0x0400  /* Channel 11 */
+#define MUX_PATTERN_PULSE_12  0x0800  /* Channel 12 */
+#define MUX_PATTERN_PULSE_13  0x1000  /* Channel 13 */
+#define MUX_PATTERN_PULSE_14  0x2000  /* Channel 14 */
+#define MUX_PATTERN_PULSE_15  0x4000  /* Channel 15 */
+#define MUX_PATTERN_PULSE_16  0x8000  /* Channel 16 */
 
 /** @brief MUX pattern for PAUSE state (all channels off) */
-#define MUX_PATTERN_PAUSE    0x0000
+#define MUX_PATTERN_PAUSE     0x0000
 
 /*==============================================================================
  * VALIDATION

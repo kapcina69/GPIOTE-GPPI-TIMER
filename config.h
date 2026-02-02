@@ -34,11 +34,15 @@
  */
 
 /** 
- * @brief Number of sequential pulses per cycle
- * @note The system generates 8 pulses in sequence, then enters PAUSE state.
- *       Each pulse routes through a different MUX channel.
+ * @brief Number of sequential pulses per cycle (default)
+ * @note The system generates up to 16 pulses in sequence, then enters PAUSE state.
+ *       By default, LED1 toggles for all 16 pulses while LED2 stays low.
+ *       This can be changed via SC command (will be implemented).
+ *       
+ *       Default mode: LED1 only operation (16 pulses)
+ *       Alternative: Can be reduced to fewer pulses via SC command
  */
-#define NUM_PULSES_PER_CYCLE 8
+#define NUM_PULSES_PER_CYCLE 16
 
 /** 
  * @brief Overhead time added to each pulse (microseconds)
@@ -50,7 +54,7 @@
  *       - * 2: Pulse consists of HIGH + LOW periods
  *       - + PULSE_OVERHEAD_US: Fixed overhead for each pulse
  */
-#define PULSE_OVERHEAD_US 100
+#define PULSE_OVERHEAD_US 50
 
 /** 
  * @brief Multiplier for pulse width calculation
