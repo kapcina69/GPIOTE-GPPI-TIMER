@@ -30,6 +30,8 @@
 
 
 
+
+
 // Reserve pins for nrfx_uarte driver
 &pinctrl {
     uart1_default_alt: uart1_default_alt {

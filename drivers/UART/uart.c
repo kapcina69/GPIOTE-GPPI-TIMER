@@ -5,6 +5,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/uart.h>
+#include <zephyr/sys/atomic.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -49,15 +50,21 @@ typedef struct {
 // Privatni baferi
 static uint8_t m_rx_chunk[RX_CHUNK_SIZE];
 static char cmd_buffer[CMD_BUFFER_SIZE];
+static char pending_cmd[CMD_BUFFER_SIZE];  // Buffer for deferred processing
 static char tx_buffer[TX_BUFFER_SIZE];
 static size_t cmd_index = 0;
 static bool cmd_started = false;
-static volatile bool tx_busy = false;
+static atomic_t tx_busy = ATOMIC_INIT(0);  // Race-safe TX flag
+static atomic_t cmd_pending = ATOMIC_INIT(0);  // Flag for pending command
 static nrfx_uarte_t uarte_inst = NRFX_UARTE_INSTANCE(UARTE_INST_IDX);
 
 volatile uint32_t current_frequency_hz = 1;
 volatile uint32_t current_pulse_width = 5;
-volatile bool parameters_updated = false;
+static atomic_t parameters_updated_flag = ATOMIC_INIT(0);  // Race-safe update flag
+
+// Work queue for deferred command processing (non-blocking)
+static void cmd_work_handler(struct k_work *work);
+K_WORK_DEFINE(cmd_work, cmd_work_handler);
 
 // Sockeet parametri
 static bool stimulation_running = false;
@@ -66,32 +73,83 @@ static uint16_t cathode_channels[16] = {0};
 
 // Test komande za periodično slanje
 static const char* test_commands[] = {
+    // === STRESS TEST SEQUENCE ===
+    
+    // 1. Basic start/stop cycle
     ">SON<",
+    ">SOFF<",
+    ">SON<",
+    
+    // 2. DAC ramp test (6 values)
     ">SA;0000 0200 0400 0600 0800 0A00<",
-    ">SC;0100 0004 4000 0020 0001 0800 0008 2000 0002 1000 0040 8000 0010 0200 0008 0400<",
-    ">SC;0001 0002<",
-    ">PW;a<"
-    // ">SOFF<",
-    // ">PW;1<",
-    // ">SON<",
-    // ">SA;0064<",
-    // ">SF;19<",
-    // ">SON<",
-    // ">PW;1<",
-    // ">PW;3<",
-    // ">PW;7<",
-    // ">PW;10<",
-    // ">SA;32<",
-    // ">SA;C8<",
-    // ">SA;2C<",
-    // ">SF;A<",
-    // ">SF;32<",
-    // ">SF;50<",
-    // ">SON<",
-    // ">SOFF<",
-    // ">PW;8<",
-    // ">SA;FA<",
-    // ">SF;64<"
+    
+    // 3. Full 16 MUX patterns
+    ">SC;0001 0002 0004 0008 0010 0020 0040 0080 0100 0200 0400 0800 1000 2000 4000 8000<",
+    
+    // 4. Pulse width sweep (1-10)
+    ">PW;1<",
+    ">PW;2<",
+    ">PW;3<",
+    ">PW;4<",
+    ">PW;5<",
+    ">PW;6<",
+    ">PW;7<",
+    ">PW;8<",
+    ">PW;9<",
+    ">PW;A<",
+    
+    // 5. Frequency sweep
+    ">SF;1<",
+    ">SF;5<",
+    ">SF;A<",
+    ">SF;19<",
+    ">SF;32<",
+    ">SF;64<",
+    
+    // 6. Reduce to 8 pulses
+    ">SC;0001 0002 0004 0008 0010 0020 0040 0080<",
+    
+    // 7. DAC full range test
+    ">SA;0000 0555 0AAA 0FFF<",
+    
+    // 8. Single pulse mode
+    ">SC;0001<",
+    ">PW;1<",
+    ">SF;64<",
+    
+    // 9. Back to multi-pulse
+    ">SC;0001 0002 0004 0008<",
+    ">PW;5<",
+    ">SF;19<",
+    
+    // 10. Edge cases - max values
+    ">SA;0FFF 0FFF 0FFF 0FFF<",
+    ">PW;A<",
+    
+    // 11. Edge cases - min values
+    ">SA;0000 0001 0002 0003<",
+    ">PW;1<",
+    
+    // 12. Rapid start/stop
+    ">SOFF<",
+    ">SON<",
+    ">SOFF<",
+    ">SON<",
+    
+    // 13. Walking bit patterns
+    ">SC;0001 0002 0004 0008 0010 0020 0040 0080<",
+    ">SC;0100 0200 0400 0800 1000 2000 4000 8000<",
+    
+    // 14. Combined patterns
+    ">SC;FFFF 0000 FFFF 0000<",
+    ">SC;5555 AAAA 5555 AAAA<",
+    
+    // 15. Final state - stable operation
+    ">SC;0001 0002 0004 0008<",
+    ">SA;0200 0400 0600 0800<",
+    ">PW;5<",
+    ">SF;A<",
+    ">SON<"
 };
 static uint8_t current_cmd_index = 0;
 
@@ -128,30 +186,31 @@ static const cmd_entry_t cmd_table[] = {
 };
 
 /**
- * @brief Šalje odgovor nazad kroz UART
+ * @brief Šalje odgovor nazad kroz UART (race-safe)
  */
 void uart_send_response(const char *response)
 {
     nrfx_err_t status;
     
+    // Wait for TX to complete with timeout
     uint32_t timeout = TX_BUSY_TIMEOUT_ITERATIONS;
-    while (tx_busy && timeout > 0) {
+    while (atomic_get(&tx_busy) && timeout > 0) {
         k_busy_wait(TX_BUSY_WAIT_US);
         timeout--;
     }
     
-    if (tx_busy) {
+    // Atomic test-and-set to acquire TX lock
+    if (!atomic_cas(&tx_busy, 0, 1)) {
         printk("WARNING: TX still busy, response dropped\n");
         return;
     }
     
     snprintf(tx_buffer, TX_BUFFER_SIZE, ">%s<", response);
     
-    tx_busy = true;
     status = nrfx_uarte_tx(&uarte_inst, (uint8_t*)tx_buffer, strlen(tx_buffer), 0);
     if (status != NRFX_SUCCESS) {
         printk("Response TX failed: 0x%08X\n", (unsigned int)status);
-        tx_busy = false;
+        atomic_set(&tx_busy, 0);  // Release lock on failure
     }
 }
 
@@ -246,7 +305,7 @@ static void handle_pw(const char *args)
         current_pulse_width = pw;
         printk("    Action: Set Pulse Width = %d (0x%02X)\n", 
                (int)current_pulse_width, (int)current_pulse_width);
-        parameters_updated = true;
+        atomic_set(&parameters_updated_flag, 1);
         uart_send_response("PWOK");
     } else {
         printk("    Action: Pulse Width out of range (%d, 0x%02X)\n", pw, pw);
@@ -325,7 +384,7 @@ static void handle_sf(const char *args)
         
         LOG_INF("Setting current_frequency_hz from %u to %d", (unsigned)current_frequency_hz, freq);
         current_frequency_hz = freq;
-        parameters_updated = true;
+        atomic_set(&parameters_updated_flag, 1);
         
         uint32_t pause = frequency_to_pause_ms(freq);
         LOG_INF("Frequency set to %d Hz (pause: %u ms)", freq, pause);
@@ -430,6 +489,23 @@ static void process_command(const char *cmd)
     print_current_state();
 }
 
+/**
+ * @brief Work handler for deferred command processing
+ * 
+ * This runs in system workqueue thread context, NOT in ISR.
+ * All printk() and LOG calls are safe here without blocking timers.
+ */
+static void cmd_work_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+    
+    // Process the pending command
+    process_command(pending_cmd);
+    
+    // Clear the pending flag to allow next command
+    atomic_set(&cmd_pending, 0);
+}
+
 /* ============================================================
  *                    UART DRIVER - IRQ HANDLER
  * ============================================================ */
@@ -440,7 +516,7 @@ static void uarte_handler(nrfx_uarte_event_t const *p_event, void *p_context)
     switch (p_event->type)
     {
         case NRFX_UARTE_EVT_TX_DONE:
-            tx_busy = false;
+            atomic_set(&tx_busy, 0);  // Release TX lock
             break;
             
         case NRFX_UARTE_EVT_RX_DONE:
@@ -455,7 +531,12 @@ static void uarte_handler(nrfx_uarte_event_t const *p_event, void *p_context)
             else if (received_char == '<') {
                 if (cmd_started && cmd_index > 0) {
                     cmd_buffer[cmd_index] = '\0';
-                    process_command(cmd_buffer);
+                    // Defer processing to work queue (non-blocking)
+                    if (atomic_cas(&cmd_pending, 0, 1)) {
+                        strncpy(pending_cmd, cmd_buffer, CMD_BUFFER_SIZE);
+                        k_work_submit(&cmd_work);
+                    }
+                    // If cmd_pending was already set, command is dropped
                 }
                 cmd_started = false;
                 cmd_index = 0;
@@ -481,6 +562,8 @@ static void uarte_handler(nrfx_uarte_event_t const *p_event, void *p_context)
             printk("[ERROR] 0x%08lX\n", p_event->data.error.error_mask);
             cmd_started = false;
             cmd_index = 0;
+            // Nakon error eventa, abort aktivni RX pre restarta
+            nrfx_uarte_rx_abort(&uarte_inst, false, true);
             status = nrfx_uarte_rx(&uarte_inst, m_rx_chunk, RX_CHUNK_SIZE);
             if (status != NRFX_SUCCESS) {
                 printk("RX restart after error failed: 0x%08X\n", (unsigned int)status);
@@ -493,13 +576,14 @@ static void uarte_handler(nrfx_uarte_event_t const *p_event, void *p_context)
 }
 
 /**
- * @brief Timer callback za test komande
+ * @brief Timer callback za test komande (race-safe)
  */
 static void tx_timer_handler(struct k_timer *timer)
 {
     nrfx_err_t status;
     
-    if (tx_busy) {
+    // Atomic test-and-set to acquire TX lock
+    if (!atomic_cas(&tx_busy, 0, 1)) {
         printk("[TX] BUSY - skipping transmission\n");
         return;
     }
@@ -511,11 +595,10 @@ static void tx_timer_handler(struct k_timer *timer)
     
     printk("[TX] Sending test command: %s\n", tx_buffer);
     
-    tx_busy = true;
     status = nrfx_uarte_tx(&uarte_inst, (uint8_t*)tx_buffer, strlen(tx_buffer), 0);
     if (status != NRFX_SUCCESS) {
         printk("TX failed: 0x%08X\n", (unsigned int)status);
-        tx_busy = false;
+        atomic_set(&tx_busy, 0);  // Release lock on failure
     }
     
     current_cmd_index = (current_cmd_index + 1) % (sizeof(test_commands) / sizeof(test_commands[0]));
@@ -578,10 +661,13 @@ int uart_send(const char *data)
     strncpy(tx_buffer, data, TX_BUFFER_SIZE - 1);
     tx_buffer[TX_BUFFER_SIZE - 1] = '\0';
     
-    tx_busy = true;
+    // Atomic test-and-set to acquire TX lock
+    if (!atomic_cas(&tx_busy, 0, 1)) {
+        return -1;  // TX busy
+    }
     status = nrfx_uarte_tx(&uarte_inst, (uint8_t*)tx_buffer, strlen(tx_buffer), 0);
     if (status != NRFX_SUCCESS) {
-        tx_busy = false;
+        atomic_set(&tx_busy, 0);
         return -1;
     }
     
@@ -593,7 +679,7 @@ int uart_send(const char *data)
  */
 bool uart_is_tx_busy(void)
 {
-    return tx_busy;
+    return atomic_get(&tx_busy) != 0;
 }
 
 /**
@@ -640,10 +726,19 @@ uint32_t uart_get_max_frequency(uint32_t pulse_width)
 
 bool uart_parameters_updated(void)
 {
-	return parameters_updated;
+	return atomic_get(&parameters_updated_flag) != 0;
 }
 
 void uart_clear_update_flag(void)
 {
-	parameters_updated = false;
+	atomic_set(&parameters_updated_flag, 0);
+}
+
+/**
+ * @brief Atomically test and clear update flag (race-safe)
+ * @return true if flag was set, false otherwise
+ */
+bool uart_test_and_clear_update_flag(void)
+{
+	return atomic_cas(&parameters_updated_flag, 1, 0);
 }

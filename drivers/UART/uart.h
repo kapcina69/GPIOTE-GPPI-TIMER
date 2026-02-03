@@ -30,7 +30,8 @@
 
 extern volatile uint32_t current_frequency_hz;
 extern volatile uint32_t current_pulse_width;
-extern volatile bool parameters_updated;
+// parameters_updated is now internal atomic - use uart_test_and_clear_update_flag()
+
 /**
  * @brief Inicijalizuje UART modul
  * @return 0 na uspeh, negativna vrednost na grešku
@@ -105,5 +106,11 @@ bool uart_parameters_updated(void);
  * @brief Clear the updated flag after reading new parameters
  */
 void uart_clear_update_flag(void);
+
+/**
+ * @brief Atomically test and clear update flag (race-safe)
+ * @return true if flag was set, false otherwise
+ */
+bool uart_test_and_clear_update_flag(void);
 
 #endif /* UART_H */

@@ -23,6 +23,7 @@
 #include "../gpiote/gpiote.h"
 #include <nrfx_example.h>
 #include <zephyr/kernel.h>
+#include <zephyr/irq.h>
 #include <hal/nrf_gpio.h>
 
 // Timer instances
@@ -145,10 +146,8 @@ static void state_timer_handler(nrf_timer_event_t event_type, void * p_context)
     
     state_transitions++;
     
-    // Check UART parameter updates
-    if (uart_parameters_updated()) {
-        uart_clear_update_flag();
-
+    // Check UART parameter updates (atomic test-and-clear)
+    if (uart_test_and_clear_update_flag()) {
         uint32_t new_pulse_us = uart_get_pulse_width_ms() * 100;
         
         nrfx_timer_disable(&timer_pulse);
@@ -372,16 +371,25 @@ uint32_t timer_get_transition_count(void)
 
 void timer_system_stop(void)
 {
-    system_running = false;
+    // CRITICAL: Disable timers FIRST to prevent race condition
+    // where ISR could set LED2 HIGH after we clear it
+    unsigned int key = irq_lock();
     
-    // Disable both timers
+    // Disable both timers before changing state
     nrfx_timer_disable(&timer_pulse);
     nrfx_timer_disable(&timer_state);
+    
+    // Now safe to change state
+    system_running = false;
+    current_state = STATE_PAUSE;  // Reset to known state
+    current_pulse_idx = 0;
+    
+    irq_unlock(key);
     
     // Set MUX to off/pause pattern
     mux_write(MUX_PATTERN_PAUSE);
     
-    // LED2 LOW when system stopped
+    // LED2 LOW when system stopped - guaranteed no ISR can change this
     nrf_gpio_pin_clear(OUTPUT_PIN_2);
 }
 
@@ -438,6 +446,9 @@ void timer_set_mux_patterns(const uint16_t *patterns, uint8_t count)
         count = MAX_PULSES_PER_CYCLE;
     }
     
+    // IRQ lock to prevent race with timer ISR reading mux_patterns[]
+    unsigned int key = irq_lock();
+    
     // Copy patterns and count non-zero ones
     uint8_t non_zero_count = 0;
     for (uint8_t i = 0; i < MAX_PULSES_PER_CYCLE; i++) {
@@ -454,6 +465,8 @@ void timer_set_mux_patterns(const uint16_t *patterns, uint8_t count)
     // Set active pulse count to number of consecutive non-zero patterns from start
     // Actually, count all until we hit the last non-zero
     active_pulse_count = (non_zero_count > 0) ? non_zero_count : 1;
+    
+    irq_unlock(key);
 }
 
 uint16_t timer_get_mux_pattern(uint8_t index)
@@ -470,6 +483,9 @@ void timer_set_dac_values(const uint16_t *values, uint8_t count)
         count = MAX_PULSES_PER_CYCLE;
     }
     
+    // IRQ lock to prevent race with timer ISR reading dac_values[]
+    unsigned int key = irq_lock();
+    
     // Copy DAC values - does NOT affect active_pulse_count
     for (uint8_t i = 0; i < MAX_PULSES_PER_CYCLE; i++) {
         if (i < count) {
@@ -477,6 +493,8 @@ void timer_set_dac_values(const uint16_t *values, uint8_t count)
         }
         // Values beyond count remain unchanged
     }
+    
+    irq_unlock(key);
 }
 
 uint16_t timer_get_dac_value(uint8_t index)
