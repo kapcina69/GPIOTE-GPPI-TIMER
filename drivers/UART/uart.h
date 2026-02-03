@@ -8,8 +8,8 @@
 
 // UART konfiguracija
 #define UARTE_INST_IDX 1
-#define UARTE_TX_PIN 16
-#define UARTE_RX_PIN 15
+#define UARTE_TX_PIN 6
+#define UARTE_RX_PIN 8
 #define RX_CHUNK_SIZE 1
 #define CMD_BUFFER_SIZE 128
 #define TX_BUFFER_SIZE 128
