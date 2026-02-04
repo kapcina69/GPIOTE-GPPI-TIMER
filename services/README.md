@@ -1,91 +1,30 @@
-# BLE Service
+# BLE OTA DFU Service
 
 ## Overview
 
-BLE Nordic UART Service (NUS) implementation for wireless remote control of pulse generation parameters.
+Minimal BLE implementation for Over-The-Air (OTA) firmware updates only. All runtime parameter control is handled via hardware UART.
 
 ## Purpose
 
-Provides wireless interface for real-time configuration of:
-- Pulse frequency (1-100 Hz)
-- Pulse width (100-10,000 µs)
-- System control (start/pause)
+- **OTA Firmware Updates**: Upload new firmware via BLE using nRF Connect or mcumgr
+- **No Runtime Commands**: Parameter control moved to UART (see [drivers/UART/](../drivers/UART/))
 
 ## Features
 
-- **Frequency Validation**: Prevents physically impossible frequency/pulse width combinations
-- **Auto-Adjustment**: Automatically reduces frequency if pulse width change makes current frequency unachievable
-- **Real-Time Updates**: Immediate parameter changes without system restart
-- **Bidirectional Communication**: Commands and status responses
+- MCUmgr SMP protocol for DFU
+- Minimal BLE footprint (no NUS service)
+- Low power advertising
+- Auto-reconnect after DFU
 
-## Command Protocol
+## Configuration
 
-### Set Frequency (SF;)
+In `prj.conf`:
 ```
-SF;25
-```
-Sets pulse frequency to 25 Hz.
-
-**Validation:**
-- Checks if frequency is achievable with current pulse width
-- Formula: `max_freq = 1,000,000 / [(pulse_width×100)×2+100]×16`
-- Rejects invalid frequencies with detailed error message
-
-**Example:**
-```
-// Current pulse width: 1000µs (10 in BLE units)
-SF;100   → ERROR: "Invalid frequency! Max achievable: 29 Hz"
-SF;25    → OK: Frequency set to 25 Hz
-```
-
-### Set Pulse Width (SW;)
-```
-SW;5
-```
-Sets pulse width to 500 µs (5 × 100 µs).
-
-**Auto-Adjustment:**
-- If new pulse width reduces max achievable frequency below current setting
-- Automatically adjusts frequency to new maximum
-- Notifies user of change
-
-**Example:**
-```
-// Current: 40 Hz, pulse width 5 (500µs)
-SW;15    → "Pulse width set to 1500 us. Frequency auto-adjusted to 19 Hz"
-```
-
-### Pause/Resume (SP;)
-```
-SP;1    // Pause pulse generation
-SP;0    // Resume pulse generation
-```
-
-## Validation Logic
-
-### Physical Limits
-
-The system enforces timing constraints based on 16-pulse cycle:
-
-```
-Active Time = [(pulse_width × 100) × 2 + 100] × 16 µs
-Max Frequency = 1,000,000 µs / Active Time
-```
-
-**Example Calculations:**
-
-| Pulse Width | Active Time | Max Frequency |
-|-------------|-------------|---------------|
-| 1 (100µs)   | 4,800 µs    | 208 Hz        |
-| 5 (500µs)   | 17,600 µs   | 56 Hz         |
-| 10 (1000µs) | 33,600 µs   | 29 Hz         |
-| 50 (5000µs) | 161,600 µs  | 6 Hz          |
-
-### Error Messages
-```
-"Invalid frequency! Max achievable with 1000us pulse: 29 Hz"
-"Pulse width must be 1-100 (100us-10000us)"
-"Unknown command"
+CONFIG_BT=y
+CONFIG_BT_PERIPHERAL=y
+CONFIG_BT_DEVICE_NAME="Nordic_Timer"
+CONFIG_BT_NUS=n                           # Disabled - use UART instead
+CONFIG_NCS_SAMPLE_MCUMGR_BT_OTA_DFU=y     # Enable OTA DFU
 ```
 
 ## API
@@ -94,97 +33,58 @@ Max Frequency = 1,000,000 µs / Active Time
 ```c
 int ble_init(void);
 ```
-Initializes BLE stack and starts advertising.
+Initializes Bluetooth, starts advertising. SMP DFU service is auto-registered.
 
-### Parameter Access
-```c
-uint32_t ble_get_pulse_width_ms(void);
-uint32_t ble_get_frequency_hz(void);
-uint32_t ble_get_pause_time_ms(void);
-uint32_t ble_get_max_frequency(uint32_t pulse_width);
-```
+## OTA Update Process
 
-### Update Tracking
-```c
-bool ble_parameters_updated(void);
-void ble_clear_update_flag(void);
-```
-Check if parameters changed, clear flag after reading.
+### Using nRF Connect App (Android/iOS)
 
-### Notifications
-```c
-void ble_notify_status(const char *message);
-```
-Send status message to connected device (internal use).
+1. Build with `west build`
+2. Open nRF Connect app
+3. Connect to "Nordic_Timer"
+4. Go to DFU tab
+5. Select `app_update.bin` from `build/zephyr/`
+6. Start upload
 
-## Connection Flow
+### Using mcumgr CLI
 
-```
-1. Power on → Auto advertising starts
-2. Connect via BLE terminal app (nRF Connect, Serial Bluetooth Terminal)
-3. Discover Nordic UART Service (6E400001-B5A3-F393-E0A9-E50E24DCCA9E)
-4. Enable RX characteristic notifications
-5. Send commands via TX characteristic
+```bash
+# List images
+mcumgr --conntype ble --connstring ctlr_name=hci0,peer_name='Nordic_Timer' image list
+
+# Upload new image
+mcumgr --conntype ble --connstring ctlr_name=hci0,peer_name='Nordic_Timer' image upload build/zephyr/app_update.bin
+
+# Confirm and reset
+mcumgr --conntype ble --connstring ctlr_name=hci0,peer_name='Nordic_Timer' reset
 ```
 
-## Integration with Hardware Drivers
+## Memory Layout
 
-### Frequency Change
+DFU requires MCUboot bootloader with dual-slot configuration:
 ```
-BLE receives SF; command
-  → Validates with physical limits
-  → Calls timer_set_state_pulse() with new period
-  → System adjusts without stopping
+┌─────────────────┐ 0x00000000
+│    MCUboot      │ (Bootloader)
+├─────────────────┤ 0x0000C000
+│   Slot 0        │ (Active image)
+│   (Application) │
+├─────────────────┤ 0x0007E000
+│   Slot 1        │ (Update image)
+│   (Staging)     │
+├─────────────────┤ 0x000F0000
+│   Settings      │
+└─────────────────┘ 0x00100000
 ```
 
-### Pulse Width Change
-```
-BLE receives SW; command
-  → Calculates new max frequency
-  → Auto-adjusts frequency if needed
-  → Calls timer_update_pulse_width()
-  → Notifies user of changes
-```
+## Build Artifacts for DFU
+
+After `west build`:
+- `build/zephyr/app_update.bin` - Signed update image
+- `build/zephyr/zephyr.signed.hex` - For J-Link programming
+- `build/zephyr/merged.hex` - Bootloader + app combined
 
 ## Dependencies
 
-- `config.h`: `CALCULATE_ACTIVE_TIME_US`, `CALCULATE_MAX_FREQUENCY_HZ` macros
-- `drivers/timers/timer.h`: Parameter update functions
-- Zephyr BLE stack: NUS service implementation
-
-## Configuration
-
-BLE parameters in `prj.conf`:
-```
-CONFIG_BT=y
-CONFIG_BT_PERIPHERAL=y
-CONFIG_BT_DEVICE_NAME="nRF52_Pulse_Gen"
-CONFIG_BT_NUS=y
-```
-
-## Usage Example
-
-```
-// Connect via nRF Connect app
-// Send commands:
-
-SF;10     → "Frequency set to 10 Hz"
-SW;20     → "Pulse width set to 2000 us"
-SF;100    → "Invalid frequency! Max achievable: 24 Hz"
-SW;50     → "Pulse width set to 5000 us. Frequency adjusted to 6 Hz"
-SP;1      → "Pulse generation paused"
-SP;0      → "Pulse generation resumed"
-```
-
-## Error Handling
-
-- Invalid format → "Unknown command"
-- Out of range → "Pulse width must be 1-100"
-- Physically impossible → Shows max achievable frequency with current pulse width
-- Connection lost → System continues with last parameters
-
-## Performance
-
-- **Latency**: ~50ms from command to hardware update
-- **Update Rate**: Can handle commands as fast as BLE throughput allows
-- **Validation Overhead**: Minimal (<1ms calculation time)
+- Zephyr BLE stack
+- MCUmgr (via `CONFIG_NCS_SAMPLE_MCUMGR_BT_OTA_DFU`)
+- MCUboot bootloader

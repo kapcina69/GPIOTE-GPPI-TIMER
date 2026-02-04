@@ -125,7 +125,8 @@ int main(void)
     NRFX_LOG_INFO("System started - DUAL CC MODE");
 
     k_sleep(K_MSEC(100));
-
+    // BLE INIT //
+    ble_init();
     // ========== UART INIT ==========
     uart_init();
     uart_start_test_timer(600);
