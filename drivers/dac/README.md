@@ -2,119 +2,135 @@
 
 ## Overview
 
-This driver targets the MCP4921 SPI DAC (12-bit). The DAC accepts a 16-bit command word where the upper control bits configure the device and the lower 12 bits contain the output value (0..4095). The driver issues non-blocking SPI transfers using nrfx SPIM.
+Non-blocking SPI DAC driver for MCP4921 12-bit digital-to-analog converter. Provides per-pulse amplitude control for the stimulation system.
 
 ## Hardware
-- **Chip**: Microchip MCP4921 (single-channel, 12-bit)
-- **Interface**: SPI (NRFX SPIM)
-- **Resolution**: 12-bit (0..4095)
-- **SPI mode**: Mode 0 (CPOL=0, CPHA=0), MSB-first
-- **Typical max SCK**: up to 20 MHz (check DAC datasheet for your VDD)
-- **CS**: active low. LDAC pin is optional (can be tied low for immediate update).
 
-## Command / Frame Format
+| Parameter | Value |
+|-----------|-------|
+| Chip | Microchip MCP4921 |
+| Resolution | 12-bit (0-4095) |
+| Interface | SPI (SPIM2) |
+| SPI Mode | Mode 0 (CPOL=0, CPHA=0) |
+| Max SCK | 20 MHz |
+| Output | Single-channel |
 
-Send a single 16-bit word (MSB first). The typical layout used by this driver is:
+## Pin Configuration
 
-- [15]    : Don't care / control bit
-- [14]    : BUF (buffered Vref) — usually 0
-- [13]    : GA (gain) — 1 = 1x (Vout = Vref * D/4096)
-- [12]    : SHDN (shutdown) — 1 = active
-- [11:0]  : 12-bit data (D)
+| Pin | Function |
+|-----|----------|
+| P0.26 | MOSI (DIN) |
+| P0.27 | SCK |
+| P0.28 | CS (active low) |
+| - | LDAC (tie to GND for immediate update) |
 
-Prepare the word in C as:
+## Command Format
+
+16-bit SPI word (MSB first):
+
+```
+Bit: 15  14  13  12  11  10   9   8   7   6   5   4   3   2   1   0
+     X   BUF GA  SHDN ─────────── DATA (12-bit) ───────────────────
+```
+
+| Bit | Name | Function |
+|-----|------|----------|
+| 15 | X | Don't care |
+| 14 | BUF | Buffered Vref (0 = unbuffered) |
+| 13 | GA | Gain (1 = 1×, 0 = 2×) |
+| 12 | SHDN | Shutdown (1 = active) |
+| 11:0 | DATA | 12-bit output value |
+
+### Typical Configuration
 
 ```c
-uint16_t word = (control_bits << 12) | (value & 0x0FFF);
-// where control_bits sets BUF/GA/SHDN in the top nibble
+// Active, 1× gain, unbuffered: control = 0b0111 = 0x7
+uint16_t word = (0x7 << 12) | (value & 0x0FFF);
 ```
 
-Example (output active, 1x gain):
+## API
+
+### Initialization
+```c
+nrfx_err_t dac_init(nrfx_spim_t *spim);
+```
+Initializes SPIM2 for DAC communication, configures CS pin.
+
+### Set Value
+```c
+nrfx_err_t dac_set_value(uint16_t value);
+```
+Sets DAC output (0-4095). Non-blocking SPI transfer.
+
+**Parameters:**
+- `value`: 12-bit DAC value (0x000 - 0xFFF)
+
+**Returns:** NRFX_SUCCESS or NRFX_ERROR_BUSY
+
+### Status
+```c
+bool dac_is_ready(void);
+void dac_wait_ready(void);
+```
+
+## Output Voltage
+
+With 1× gain and Vref = VDD:
+
+```
+Vout = Vref × (value / 4096)
+```
+
+| Value | Output (3.3V Vref) |
+|-------|-------------------|
+| 0 | 0.00 V |
+| 2048 | 1.65 V |
+| 4095 | 3.30 V |
+
+## Integration with Timer
+
+DAC values are pre-loaded with MUX patterns:
 
 ```c
-uint16_t control = 0b0111; // example: X BUF GA SHDN -> set according to needs
-uint16_t value = 2048;     // half-scale
-uint16_t tx = (control << 12) | (value & 0x0FFF);
-// send tx as big-endian 2 bytes over SPI
-```
-
-## Wiring / Pinout (example)
-
-```
-nRF52 (devkit)    MCP4921
---------------    -------
-P0.26 (MOSI)   ->  DIN / SDI
-P0.27 (SCK)    ->  SCK
-P0.28 (CS)     ->  CS (active low)
-P0.29 (LDAC)   ->  LDAC (optional; tie to GND for immediate update)
-GND            ->  GND
-VDD            ->  VDD (match DAC Vref)
-```
-
-Adjust pins to match your board wiring; the driver uses `drivers/dac/dac_config.h` for pin defines.
-
-## Configuration
-
-Edit `drivers/dac/dac_config.h` (or `config.h`) to match your wiring and SPIM instance. Example:
-
-```c
-// NRFX SPIM instance used for the DAC
-#define DAC_SPIM_INST_IDX  2
-
-// Pins (nRF pin numbers)
-#define DAC_MOSI_PIN       26
-#define DAC_SCK_PIN        27
-#define DAC_CS_PIN         28
-#define DAC_LDAC_PIN       29 // optional
-
-// SPI frequency (Hz)
-#define DAC_SPI_FREQUENCY  1000000u // 1 MHz recommended to start
-```
-
-Note: If the device-tree contains an SPI node for the same SPIM instance, disable DT auto-init or use matching DT pinctrl to avoid conflicts with manual nrfx init.
-
-## Driver API / Usage
-
-Typical usage in firmware:
-
-```c
-// Provide nrfx SPIM instance when initializing
-nrfx_spim_t spim = NRFX_SPIM_INSTANCE(DAC_SPIM_INST_IDX);
-nrfx_err_t err = dac_init(&spim);
-
-// Set output value (0..4095)
-dac_set_value(uint16_t value);
-
-// Internals: the driver packs the 16-bit word into a 2-byte BE buffer
-// and performs a non-blocking spim transfer. dac_set_value can be
-// used from ISRs if the driver supports ISR-safe enqueueing.
-```
-
-Example packing helper:
-
-```c
-static inline void dac_send_value(uint16_t value, uint8_t buf[2]) {
-	uint16_t control = 0b0111; // set BUF/GA/SHDN as required
-	uint16_t tx = (control << 12) | (value & 0x0FFF);
-	buf[0] = (uint8_t)(tx >> 8);
-	buf[1] = (uint8_t)(tx & 0xFF);
+// In state_timer_handler() CC1 event
+if (ENABLE_DAC_PRELOAD) {
+    dac_set_value(dac_values[next_idx]);
 }
 ```
 
-## Calibration & Vref
+## Per-Pulse DAC Values
 
-- The DAC output range depends on the Vref supplied to the MCP4921. For 1x gain, Vout = Vref * (D/4096).
-- If you need a buffered reference, configure the control bits accordingly and follow the datasheet recommendations.
+Set via SA command or `timer_set_dac_values()`:
 
-## Notes and Gotchas
+```c
+// Default: Linear ramp 200 → 4000
+static uint16_t dac_values[16] = {
+    200,   // Pulse 1
+    450,   // Pulse 2
+    ...
+    4000   // Pulse 16
+};
+```
 
-- Ensure no device-tree entry auto-initializes the same SPIM instance you use manually; that will cause nrfx init errors (instance already in use).
-- CS must be driven active low for transfers. If your board has a dedicated CS control, ensure the driver asserts/de-asserts it correctly or use hardware CS if supported.
-- If you use LDAC pin to simultaneously update multiple DACs, wire it and toggle as needed; tying LDAC low updates output immediately.
-- SPI clock speed should respect the DAC datasheet limits for your VDD.
+### UART Command
+```
+>SA;00C8 01C2 02BC 03B6<
+```
+Sets DAC values for 4 pulses (0x00C8=200, 0x01C2=450, etc.)
 
-## References
+## Configuration
 
-- MCP4921 Datasheet (Microchip)
-- nrfx SPIM API documentation
+In `dac_config.h`:
 
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `DAC_SPIM_INST_IDX` | 2 | SPI instance for DAC |
+| `DAC_MOSI_PIN` | 26 | MOSI pin |
+| `DAC_SCK_PIN` | 27 | SCK pin |
+| `DAC_CS_PIN` | 28 | CS pin |
+| `ENABLE_DAC_PRELOAD` | 1 | Enable per-pulse DAC |
+
+## Dependencies
+
+- `nrfx_spim.h`: SPI master driver
+- `config.h`: Feature flags, pin definitions

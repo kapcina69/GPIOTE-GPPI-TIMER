@@ -1,67 +1,101 @@
 # GPPI Driver
 
 ## Overview
-GPPI (Generic PPI) driver manages hardware event routing between peripherals without CPU intervention.
 
-## Purpose
-Connects timer events to GPIOTE tasks and SAADC tasks for zero-latency pulse generation and sampling.
+GPPI (Generic Peripheral Interconnect) driver for hardware-triggered pulse generation and ADC sampling. Connects timer events to GPIOTE tasks without CPU intervention.
+
+## Operating Mode
+
+- **PIN1 (LED1)**: GPPI-controlled pulse output
+- **PIN2 (LED2)**: Disabled (static LOW, no GPPI)
+- **ADC**: Hardware-triggered sampling at pulse end
 
 ## Channel Allocation
-Allocates 6 GPPI channels:
-- **2 channels for PIN1**: Clear and Set tasks
-- **2 channels for PIN2**: Clear and Set tasks  
-- **2 channels for ADC**: Sample trigger and capture
 
-## Connections
+| Channel Variable | Purpose |
+|-----------------|---------|
+| `gppi_pin1_set` | Timer → GPIOTE SET (pulse end) |
+| `gppi_pin1_clr` | Timer → GPIOTE CLR (pulse start) |
+| `gppi_adc_trigger` | Timer → SAADC SAMPLE task |
+| `gppi_adc_capture` | SAADC END → Timer CAPTURE |
 
-### Pulse Generation
+## Signal Routing
+
+### Pulse Generation (LED1)
 ```
-TIMER1.CC0 → GPIOTE.PIN1_CLR  (pulse start - clear pin)
-TIMER1.CC1 → GPIOTE.PIN1_SET  (pulse end - set pin)
-TIMER1.CC2 → GPIOTE.PIN2_CLR  (pulse start - clear pin)
-TIMER1.CC3 → GPIOTE.PIN2_SET  (pulse end - set pin)
+Timer CC[0] ──GPPI──▶ GPIOTE TASKS_CLR[ch] ──▶ PIN1 LOW (pulse start)
+Timer CC[1] ──GPPI──▶ GPIOTE TASKS_SET[ch] ──▶ PIN1 HIGH (pulse end)
 ```
 
 ### ADC Sampling
 ```
-TIMER1.CC1 → SAADC.SAMPLE      (trigger ADC on pulse end)
-SAADC.END  → TIMER2.CAPTURE4   (timestamp ADC completion)
+Timer CC[1] ──GPPI──▶ SAADC SAMPLE task
+SAADC END  ──GPPI──▶ Timer CAPTURE[4] task (timestamp)
 ```
 
 ## API
 
 ### Initialization
+
 ```c
 nrfx_err_t gppi_init(void);
 ```
-Allocates 6 GPPI channels.
 
-### Setup
+Allocates all required GPPI channels.
+
+**Returns:** NRFX_SUCCESS or error code
+
+### Setup Connections
+
 ```c
 nrfx_err_t gppi_setup_connections(uint8_t gpiote_ch_pin1, uint8_t gpiote_ch_pin2);
 ```
-Configures all hardware event-to-task connections.
 
-### Enable
+Configures GPPI endpoints between timer events and GPIOTE/SAADC tasks.
+
+**Parameters:**
+- `gpiote_ch_pin1`: GPIOTE channel for PIN1 (used)
+- `gpiote_ch_pin2`: Ignored (PIN2 is static GPIO)
+
+### Enable/Disable
+
 ```c
 void gppi_enable(void);
+void gppi_disable(void);
 ```
-Activates all GPPI channels simultaneously.
 
-## Benefits
-- **Zero CPU Overhead**: Hardware-to-hardware event routing
-- **Precise Timing**: No interrupt latency
-- **Power Efficient**: CPU can sleep during pulse generation
-- **Synchronized Sampling**: ADC samples at exact pulse end
+Enables or disables all GPPI channels atomically.
+
+## Hardware Peripherals Connected
+
+| Source | Event/Task | Target |
+|--------|-----------|--------|
+| STATE_TIMER CC[0] | Compare event | GPIOTE CLR[PIN1] |
+| STATE_TIMER CC[1] | Compare event | GPIOTE SET[PIN1] |
+| STATE_TIMER CC[1] | Compare event | SAADC SAMPLE |
+| SAADC | END event | STATE_TIMER CAPTURE[4] |
+
+## Timing Diagram
+
+```
+              CC[0]               CC[1]
+Timer:   ──────┴──────────────────┴──────
+                ↓                   ↓
+PIN1:    ▔▔▔▔▔▔▔▔▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▔▔▔▔▔▔
+              (CLR)              (SET)
+                                  ↓
+ADC:           ─────────────────SAMPLE
+```
 
 ## Dependencies
-- `config.h`: Hardware indices and pin definitions
-- `drivers/timers/timer.h`: Timer instance access
-- `nrfx_gppi.h`: GPPI HAL functions
-- `hal/nrf_saadc.h`: SAADC task addresses
 
-## Hardware Requirements
-- DPPI peripheral (nRF52/nRF53 series)
-- Timer with multiple CC channels
-- GPIOTE configured for task mode
-- SAADC peripheral
+- `nrfx_gppi.h`: GPPI helper functions
+- `nrfx_timer.h`: Timer event addresses
+- `hal/nrf_saadc.h`: SAADC task/event addresses
+- `hal/nrf_gpiote.h`: GPIOTE task addresses
+
+## Notes
+
+- PPI/DPPI selection is automatic based on SoC family
+- nRF52840 uses PPI (8 channels max per group)
+- nRF53/nRF91 series would use DPPI

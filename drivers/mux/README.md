@@ -1,23 +1,53 @@
 # MUX Driver
 
 ## Overview
-Multiplexer driver for SPI-based 16-channel control using shift registers.
+
+Non-blocking SPI multiplexer driver for 16-channel analog signal routing.
 
 ## Purpose
-Controls external 16-channel multiplexer via SPI to route analog signals to ADC input, synchronized with pulse generation state machine.
+
+Controls external 16-channel multiplexer via SPI shift registers. Each bit in the 16-bit pattern corresponds to one channel. The MUX pattern is pre-loaded before each pulse to ensure zero-latency channel switching.
 
 ## Hardware Interface
-- **SPI Peripheral**: SPIM2 (non-blocking async transfers)
-- **Shift Register**: 2-byte (16-bit) pattern sent MSB first
-- **Control Pins**:
-  - `MUX_LE_PIN` (P0.1): Latch Enable - pulses HIGH to latch data
-  - `MUX_CLR_PIN` (P0.0): Clear - clears all channels when HIGH
+
+| Pin | Function | Description |
+|-----|----------|-------------|
+| P0.03 | MOSI | SPI data out |
+| P0.05 | SCK | SPI clock |
+| P0.01 | LE | Latch Enable (pulses HIGH to latch) |
+| P0.00 | CLR | Clear (not used in normal operation) |
+
+**SPI Instance:** SPIM1
+
+## Pattern Format
+
+16-bit pattern, MSB first. Each bit enables one channel:
+
+```
+Bit:   15  14  13  12  11  10   9   8   7   6   5   4   3   2   1   0
+Chan:  16  15  14  13  12  11  10   9   8   7   6   5   4   3   2   1
+```
+
+### Example Patterns
+
+| Pattern | Channels Active |
+|---------|-----------------|
+| `0x0001` | Channel 1 only |
+| `0x0002` | Channel 2 only |
+| `0x8000` | Channel 16 only |
+| `0x00FF` | Channels 1-8 |
+| `0xFF00` | Channels 9-16 |
+| `0x5555` | Odd channels (1,3,5...) |
+| `0x0000` | All off (pause pattern) |
 
 ## ISR-Safe Design
-Optimized for calling from interrupt context:
-- **Non-blocking**: Returns immediately, transfer completes in background
-- **Status Check**: `mux_is_ready()` polls transfer completion
-- **Busy Handling**: Returns `NRFX_ERROR_BUSY` if previous transfer ongoing
+
+Optimized for calling from timer interrupt context:
+
+- **Non-blocking**: `mux_write()` returns immediately
+- **Async completion**: SPI interrupt handles transfer end
+- **Busy handling**: Returns `NRFX_ERROR_BUSY` if transfer ongoing
+- **Status polling**: `mux_is_ready()` checks completion
 
 ## API
 
@@ -25,68 +55,71 @@ Optimized for calling from interrupt context:
 ```c
 nrfx_err_t mux_init(nrfx_spim_t *spim);
 ```
-Initializes SPIM, configures GPIO control pins, clears all channels.
+Initializes SPIM, configures LE/CLR pins, clears all channels.
 
-### Write Operations
+### Write Pattern
 ```c
 nrfx_err_t mux_write(uint16_t data);
 ```
-Sends 16-bit pattern to MUX (non-blocking). Each bit position corresponds to a channel.
+Sends 16-bit pattern (non-blocking). Returns immediately.
 
-**Example Patterns:**
+### Status
 ```c
-0x0101  // Channel 1 + Channel 9
-0x0202  // Channel 2 + Channel 10
-0x8080  // Channel 8 + Channel 16
+bool mux_is_ready(void);      // Check if ready for new transfer
+void mux_wait_ready(void);    // Busy-wait for completion
 ```
-
-### Status Check
-```c
-bool mux_is_ready(void);
-void mux_wait_ready(void);
-```
-Check or wait for transfer completion.
 
 ## Transfer Sequence
-1. `mux_write()` called with 16-bit pattern
-2. SPI transfer initiated (MSB first)
-3. Function returns immediately (non-blocking)
-4. SPI interrupt fires on completion
-5. LE pin pulsed to latch data into output registers
 
-## Integration with State Machine
+```
+1. mux_write(pattern) called
+2. Convert to big-endian bytes
+3. Start SPI transfer (non-blocking)
+4. Function returns immediately
+5. SPI interrupt fires on completion
+6. LE pin pulsed HIGH→LOW to latch data
+7. m_xfer_done = true
+```
+
+## Integration with Timer
+
+The timer ISR calls `mux_write()` on CC1 event (pre-load):
+
 ```c
-// Timer ISR calls mux_write() on CC1 event (MUX pre-load)
-void state_timer_handler(nrf_timer_event_t event, void *context) {
-    if (event == NRF_TIMER_EVENT_COMPARE1) {
-        mux_write(next_pattern);  // Non-blocking, safe in ISR
-    }
+// In state_timer_handler()
+if (event_type == NRF_TIMER_EVENT_COMPARE1) {
+    // Pre-load next MUX pattern
+    mux_write(mux_patterns[next_idx]);
 }
 ```
 
-## Timing Considerations
-- **Pre-load Advance**: MUX pattern sent 200-500µs before pulse (configurable via `MUX_ADVANCE_TIME_US`)
-- **Latch Pulse Width**: ~50-100ns (4 NOP instructions @ 64MHz)
-- **SPI Clock**: Configured via `NRFX_SPIM_DEFAULT_CONFIG`
+This ensures the MUX pattern arrives ~50µs BEFORE the pulse starts.
+
+## Default Patterns (Walking Bit)
+
+Defined in `mux_config.h`:
+
+```c
+#define MUX_PATTERN_PULSE_1   0x0001  // Channel 1
+#define MUX_PATTERN_PULSE_2   0x0002  // Channel 2
+#define MUX_PATTERN_PULSE_3   0x0004  // Channel 3
+...
+#define MUX_PATTERN_PULSE_16  0x8000  // Channel 16
+#define MUX_PATTERN_PAUSE     0x0000  // All off
+```
+
+## Configuration
+
+In `mux_config.h`:
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `SPIM_INST_IDX` | 1 | SPI instance for MUX |
+| `MUX_ADVANCE_TIME_US` | 50 | Pre-load advance time |
+| `MUX_LE_PIN` | 1 | Latch Enable pin |
+| `MUX_CLR_PIN` | 0 | Clear pin |
 
 ## Dependencies
-- `config.h`: SPIM instance index, control pin definitions
-- `nrfx_spim.h`: SPIM driver functions
-- `hal/nrf_gpio.h`: GPIO control for LE and CLR pins
 
-## Error Handling
-- Returns `NRFX_ERROR_BUSY` if transfer already in progress
-- Check `mux_is_ready()` before calling `mux_write()` in critical paths
-- Use `mux_wait_ready()` only outside ISR context (blocking)
-
-## Hardware Connection Example
-```
-MCU SPIM2 → 74HC595/74HC164 Shift Register → 16-channel Analog MUX
-            LE Pin → Latch Enable
-            CLR Pin → Clear
-```
-
-## Performance
-- **Transfer Time**: ~16µs for 16-bit @ 1MHz SPI
-- **CPU Overhead**: Minimal (async transfer + ISR callback)
-- **Safe for ISR**: Yes (non-blocking design)
+- `nrfx_spim.h`: SPI master driver
+- `config.h`: Pin definitions

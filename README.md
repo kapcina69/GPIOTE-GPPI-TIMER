@@ -2,366 +2,205 @@
 
 ## Overview
 
-Advanced multi-channel pulse generation system with BLE remote control, hardware-triggered ADC sampling, and SPI-controlled multiplexer. Built on modular driver architecture for nRF52833.
+Advanced multi-channel pulse generation system with **UART command control**, hardware-triggered ADC sampling, and SPI-controlled multiplexer. Built on modular driver architecture for nRF52840/nRF52833.
 
 **Key Features:**
-- 8-pulse sequential generation with configurable frequency (1-100 Hz)
-- Dual-timer architecture with MUX pre-loading for zero-latency switching
-- Hardware event routing (GPPI) eliminates CPU intervention
-- Real-time BLE parameter control with physical limit validation
+- **16-pulse sequential generation** with configurable frequency (1-100 Hz)
+- **Dual-timer architecture** with MUX pre-loading for zero-latency switching
+- **Hardware event routing (GPPI)** eliminates CPU intervention
+- **UART command interface** with loopback testing support
+- **Non-blocking UART** - commands processed via work queue
+- **Race-condition safe** - atomic operations and IRQ locks
 - Synchronized ADC sampling on every pulse
 - 16-channel multiplexer control via SPI
-- DAC amplitude control (MCP4725) via I2C for analog output
+- DAC amplitude control via SPI (12-bit, per-pulse configurable)
 
 ## Architecture
 
 ### Modular Design
 ```
-main.c (137 lines - orchestration only)
+main.c (orchestration only)
 ├── services/
-│   └── ble - BLE Nordic UART Service with validation
+│   └── ble.c/h - BLE Nordic UART Service (optional)
 ├── drivers/
-│   ├── timers/ - Dual-timer state machine
+│   ├── UART/ - UART command interface (non-blocking)
+│   ├── timers/ - Dual-timer 16-pulse state machine
 │   ├── gppi/ - Hardware event routing
 │   ├── gpiote/ - Task-controlled output pins
 │   ├── saadc/ - Hardware-triggered ADC
-│   ├── mux/ - SPI multiplexer control
-│   └── dac/ - I2C DAC control (MCP4725)
+│   ├── mux/ - SPI multiplexer control (16-channel)
+│   └── dac/ - SPI DAC control (MCP4921, 12-bit)
 ├── config.h - General project configuration
-└── drivers/*/.*_config.h - Driver-specific configurations
+└── drivers/*/*.config.h - Driver-specific configurations
 ```
 
 ### Hardware Flow
-```
-Timer State Machine (CC0/CC1) 
-    ↓ (GPPI)
-GPIOTE Tasks → GPIO Pulses
-    ↓ (GPPI)
-SAADC Sample → ADC Conversion
-    ↓ (GPPI)
-MUX Pattern Update (SPI)
-```
-
-## Requirements
-
-| **Board**           | **Support** |
-|---------------------|:-----------:|
-| nrf52833dk_nrf52833 |     Yes     |
-| nrf52840dk_nrf52840 |     Yes     |
-| nrf5340dk_nrf5340   |   Possible  |
-
-**SDK:** nRF Connect SDK v2.9.1, Zephyr 3.7.99
-
-## Project Structure
-
-### Drivers (`drivers/`)
-Each driver is self-contained with README documentation:
-
-- **timers/** - Dual-timer pulse generation
-  - `timer.c/h` - 8-pulse state machine with MUX pre-loading
-  - Dual CC channels: CC0 (state transition), CC1 (MUX advance)
-  
-- **gppi/** - Hardware event routing
-  - `gppi.c/h` - 6 GPPI channels for zero-latency triggering
-  - Connects timer → GPIOTE, timer → SAADC, SAADC → timer
-  
-- **gpiote/** - GPIO task mode control
-  - `gpiote.c/h` - Task-controlled output pins
-  - Hardware-triggered pulse generation
-  
-- **saadc/** - ADC sampling
-  - `saadc.c/h` - Continuous sampling with double buffering
-  - Hardware-triggered on pulse completion
-  
-- **mux/** - SPI multiplexer
-  - `mux.c/h` - ISR-safe non-blocking SPI control
-  - 16-channel analog routing
-  
-- **dac/** - I2C DAC control
-  - `dac.c/h` - MCP4725 12-bit DAC driver
-  - Async I2C transfers with race condition protection
-
-### Services (`services/`)
-- **ble.c/h** - Nordic UART Service
-  - BLE commands: SF; (frequency), SW; (pulse width), SP; (pause)
-  - Physical limit validation
-  - Auto-adjustment when parameters conflict
-
-### Configuration
-**Main Configuration (`config.h`):**
-- General pulse generation parameters
-- Feature flags (ADC logging, stats timer)
-- Logging configuration
-- Includes all driver-specific configs
-
-**Driver-Specific Configurations:**
-- `drivers/mux/mux_config.h` - SPIM instance, MUX patterns, advance timing
-- `drivers/saadc/saadc_config.h` - ADC channels, resolution, batch size
-- `drivers/timers/timer_config.h` - Timer instance assignments
-- `drivers/gpiote/gpiote_config.h` - GPIOTE instance and output pins
-- `drivers/dac/dac_config.h` - I2C instance, pins, DAC address
-# Hardware-Synchronized Pulse Generation System
-
-## Overview
-
-Advanced multi-channel pulse generation system with BLE remote control, hardware-triggered ADC sampling, and SPI-controlled multiplexer. Built on modular driver architecture for nRF52833.
-
-**Key Features:**
-- 8-pulse sequential generation with configurable frequency (1-100 Hz)
-- Dual-timer architecture with MUX pre-loading for zero-latency switching
-- Hardware event routing (GPPI) eliminates CPU intervention
-- Real-time BLE parameter control with physical limit validation
-- Synchronized ADC sampling on every pulse
-- 16-channel multiplexer control via SPI
-- DAC amplitude control via SPI (external SPI DAC) for analog output
-
-## Architecture
-
-### Modular Design
-
-```
-main.c (137 lines - orchestration only)
-├── services/
-│   └── ble - BLE Nordic UART Service with validation
-├── drivers/
-│   ├── timers/ - Dual-timer state machine
-│   ├── gppi/ - Hardware event routing
-│   ├── gpiote/ - Task-controlled output pins
-│   ├── saadc/ - Hardware-triggered ADC
-│   ├── mux/ - SPI multiplexer control
-│   └── dac/ - SPI DAC control (external SPI DAC)
-├── config.h - General project configuration
-└── drivers/*/*_config.h - Driver-specific configurations
-```
-
-### Hardware Flow
-
 ```
 Timer State Machine (CC0/CC1)
-    -> GPPI
-GPIOTE Tasks -> GPIO Pulses
-    -> GPPI
-SAADC Sample -> ADC Conversion
-    -> GPPI
-MUX Pattern Update (SPI)
+    ↓ (GPPI)
+GPIOTE Tasks → GPIO Pulses (LED1, LED2)
+    ↓ (GPPI)
+SAADC Sample → ADC Conversion
+    ↓ (State Timer ISR)
+MUX Pattern Update (SPI) + DAC Value (SPI)
 ```
 
 ## Requirements
 
 | **Board**           | **Support** |
 |---------------------|:-----------:|
-| nrf52833dk_nrf52833 |     Yes     |
 | nrf52840dk_nrf52840 |     Yes     |
+| nrf52833dk_nrf52833 |     Yes     |
 | nrf5340dk_nrf5340   |   Possible  |
 
 **SDK:** nRF Connect SDK v2.9.1, Zephyr 3.7.99
 
+## UART Command Protocol
+
+Commands use format: `>CMD;args<`
+
+| Command | Format | Description | Example |
+|---------|--------|-------------|---------|
+| **SON** | `>SON<` | Start stimulation | `>SON<` → `>SONOK<` |
+| **SOFF** | `>SOFF<` | Stop stimulation | `>SOFF<` → `>OFFOK<` |
+| **PW** | `>PW;XX<` | Set pulse width (hex, 1-10) | `>PW;5<` → `>PWOK<` |
+| **SF** | `>SF;XX<` | Set frequency Hz (hex, 1-100) | `>SF;19<` → `>SFOK<` |
+| **SC** | `>SC;XXXX XXXX ...<` | Set MUX patterns (up to 16) | `>SC;0001 0002 0004<` |
+| **SA** | `>SA;XXXX XXXX ...<` | Set DAC values (up to 16) | `>SA;0200 0400 0800<` |
+
+### Command Details
+
+**Pulse Width (PW):** Value 1-10, represents 100µs to 1000µs (×100µs)
+
+**Frequency (SF):** Value 1-100 Hz. Validated against max achievable frequency.
+
+**MUX Patterns (SC):** Space-separated 16-bit hex patterns. Number of non-zero patterns determines active pulse count.
+
+**DAC Values (SA):** Space-separated 12-bit hex values (0x000-0xFFF). Does not affect pulse count.
+
+## Pin Configuration
+
+### UART (UARTE1)
+| Pin | Function |
+|-----|----------|
+| P0.06 | TX |
+| P0.08 | RX |
+
+### SPI - MUX (SPIM1)
+| Pin | Function |
+|-----|----------|
+| P0.03 | MOSI |
+| P0.05 | SCK |
+| P0.01 | LE (Latch Enable) |
+| P0.00 | CLR (Clear) |
+
+### SPI - DAC (SPIM2)
+| Pin | Function |
+|-----|----------|
+| P0.26 | MOSI |
+| P0.27 | SCK |
+| P0.28 | CS |
+
+### GPIO Output
+| Pin | Function |
+|-----|----------|
+| P0.13 | LED1 (Pulse output) |
+| P0.14 | LED2 (Sequence indicator) |
+
 ## Project Structure
 
 ### Drivers (`drivers/`)
-Each driver is self-contained with README documentation:
+
+- **UART/** - UART command interface
+  - Non-blocking RX via work queue
+  - Race-safe TX with atomic operations
+  - Loopback test mode with timer
+  - See [drivers/UART/README.md](drivers/UART/README.md)
 
 - **timers/** - Dual-timer pulse generation
-  - `timer.c/h` - 8-pulse state machine with MUX pre-loading
-  - Dual CC channels: CC0 (state transition), CC1 (MUX advance)
+  - 16-pulse state machine (configurable 1-16)
+  - Dual CC channels: CC0 (state transition), CC1 (MUX pre-load)
+  - IRQ-protected pattern/DAC updates
+  - See [drivers/timers/README.md](drivers/timers/README.md)
   
 - **gppi/** - Hardware event routing
-  - `gppi.c/h` - 6 GPPI channels for zero-latency triggering
-  - Connects timer -> GPIOTE, timer -> SAADC, SAADC -> timer
+  - 6 GPPI channels for zero-latency triggering
+  - Connects timer → GPIOTE, timer → SAADC
+  - See [drivers/gppi/README.md](drivers/gppi/README.md)
   
 - **gpiote/** - GPIO task mode control
-  - `gpiote.c/h` - Task-controlled output pins
+  - Task-controlled output pins
   - Hardware-triggered pulse generation
+  - See [drivers/gpiote/README.md](drivers/gpiote/README.md)
   
 - **saadc/** - ADC sampling
-  - `saadc.c/h` - Continuous sampling with double buffering
+  - Continuous sampling with double buffering
   - Hardware-triggered on pulse completion
+  - See [drivers/saadc/README.md](drivers/saadc/README.md)
   
 - **mux/** - SPI multiplexer
-  - `mux.c/h` - ISR-safe non-blocking SPI control
+  - ISR-safe non-blocking SPI control
   - 16-channel analog routing
+  - See [drivers/mux/README.md](drivers/mux/README.md)
   
 - **dac/** - SPI DAC control
-  - `dac.c/h` - SPI DAC driver (generic 12-bit/16-bit compatible)
-  - Async SPI transfers with race condition protection
+  - MCP4921 12-bit DAC driver
+  - Per-pulse amplitude control
+  - See [drivers/dac/README.md](drivers/dac/README.md)
 
 ### Services (`services/`)
-- **ble.c/h** - Nordic UART Service
-  - BLE commands: SF; (frequency), SW; (pulse width), SP; (pause)
-  - Physical limit validation
-  - Auto-adjustment when parameters conflict
+- **ble.c/h** - Nordic UART Service (optional)
+  - BLE commands for remote control
+  - See [services/README.md](services/README.md)
 
-### Configuration
-**Main Configuration (`config.h`):**
-- General pulse generation parameters
-- Feature flags (ADC logging, stats timer)
-- Logging configuration
-- Includes all driver-specific configs
+## Build and Flash
 
-**Driver-Specific Configurations:**
-- `drivers/mux/mux_config.h` - SPIM instance, MUX patterns, advance timing
-- `drivers/saadc/saadc_config.h` - ADC channels, resolution, batch size
-- `drivers/timers/timer_config.h` - Timer instance assignments
-- `drivers/gpiote/gpiote_config.h` - GPIOTE instance and output pins
-- `drivers/dac/dac_config.h` - SPIM instance, pins, SPI frequency
-
-## Hardware Connections
-
-### Required Wiring
-```
-P0.13 (LED1) -> Output Pin 1 (pulse generation)
-P0.14 (LED2) -> Output Pin 2 (pulse generation)
-P0.1  -> MUX Latch Enable (LE)
-P0.0  -> MUX Clear (CLR)
-
-LOOPBACK_PIN_1A -> MOSI (SPI to MUX)
-LOOPBACK_PIN_2A -> SCK  (SPI to MUX)
-
-AIN0 (P0.2) -> Analog input for ADC sampling
-
-P0.26 (MOSI) -> DAC MOSI / DIN (SPI)
-P0.27 (SCK)  -> DAC SCK (SPI)
-P0.28 (CS)   -> DAC CS / LD (SPI) (if required by your DAC)
-```
-
-### Optional Connections
-- Connect analog multiplexer output to AIN0
-- External signal monitoring on LED pins
-
-## Building and Running
-
-### Build
 ```bash
-cd /path/to/non_blocking
-west build -b nrf52833dk_nrf52833
-```
-
-### Flash
-```bash
+cd non_blocking
+west build -b nrf52840dk/nrf52840
 west flash
 ```
 
-### Monitor
+## Logging
+
+Logs are output via **RTT** (not UART, to keep UART pins free):
 ```bash
-# Serial output (115200 baud)
-minicom -D /dev/ttyACM0 -b 115200
-
-# Or use nRF Terminal in VS Code
+# In VS Code: use nRF Terminal with RTT
+# Or via command line:
+JLinkRTTClient
 ```
 
-## BLE Control
+## Race Condition Protection
 
-### Connection
-1. Open nRF Connect app (Android/iOS)
-2. Scan and connect to "nRF52_Pulse_Gen"
-3. Enable Nordic UART Service notifications
+The system implements several race-condition safeguards:
 
-### Commands
+1. **Atomic flags** for `tx_busy` and `parameters_updated`
+2. **IRQ locks** when updating `mux_patterns[]` and `dac_values[]`
+3. **Work queue** for UART command processing (non-blocking ISR)
+4. **Atomic test-and-clear** for parameter update flag
+
+## State Machine
+
 ```
-SF;25    -> Set frequency to 25 Hz
-SW;10    -> Set pulse width to 1000 µs (10 × 100µs)
-SP;1     -> Pause pulse generation
-SP;0     -> Resume pulse generation
-SA;15    -> Set DAC amplitude to 15 (range: 1-30, DAC value = amplitude × 8.5)
+┌─────────────────────────────────────────────────────────┐
+│                    STATE_PULSE                          │
+│  Pulse 0 → Pulse 1 → ... → Pulse N-1                   │
+│  (N = active_pulse_count, configurable 1-16)           │
+│  LED2 = HIGH during entire sequence                     │
+└───────────────────────────┬─────────────────────────────┘
+                            │ All pulses complete
+                            ▼
+┌─────────────────────────────────────────────────────────┐
+│                    STATE_PAUSE                          │
+│  Duration = (1/freq) - active_time                      │
+│  LED2 = LOW                                             │
+└───────────────────────────┬─────────────────────────────┘
+                            │ Pause complete
+                            ▼
+                      (Repeat cycle)
 ```
-
-## Sample Output
-
-See firmware serial logs for startup and status messages (MUX initialized, timers enabled, GPPI configured).
-
-## Configuration Options
-
-### Enable/Disable Features (`config.h`)
-```c
-#define ENABLE_STATS_TIMER 1     // Periodic statistics output
-#define ENABLE_ADC_LOGGING 1     // ADC value printing (in drivers/saadc/saadc_config.h)
-#define LOG_EVERY_N_SAMPLES 1024 // ADC logging interval (in drivers/saadc/saadc_config.h)
-```
-
-### Adjust Driver-Specific Settings
-
-**MUX Configuration** (`drivers/mux/mux_config.h`):
-```c
-#define MUX_ADVANCE_TIME_US 50    // MUX pre-load time (10-1000µs)
-#define MUX_PATTERN_PULSE_1 0x0101 // Customize for your hardware
-```
-
-**SAADC Configuration** (`drivers/saadc/saadc_config.h`):
-```c
-#define SAADC_RESOLUTION NRF_SAADC_RESOLUTION_10BIT
-#define ADC_INTERRUPT_BATCH_SIZE 8
-```
-
-**DAC Configuration** (`drivers/dac/dac_config.h`):
-```c
-// Example SPI-based DAC configuration
-#define DAC_SPIM_INST_IDX  2    // NRFX SPIM instance for DAC
-#define DAC_MOSI_PIN       26
-#define DAC_SCK_PIN        27
-#define DAC_CS_PIN         28
-#define DAC_SPI_FREQUENCY  1000000 // 1 MHz
-```
-
-## Troubleshooting
-
-### No pulses on output pins
-- Check GPIOTE initialization in logs
-- Verify GPPI connections are enabled
-- Ensure timer_pulse_enable() is called
-
-### BLE commands not working
-- Check BLE connection status
-- Verify command format (SF;25, not SF:25)
-- Monitor serial output for error messages
-
-### ADC not sampling
-- Verify GPPI connection from timer to SAADC
-- Check SAADC initialization logs
-- Enable ADC logging to see sample values
-
-### MUX not switching
-- Check SPI connections (MOSI, SCK)
-- Verify LE pin pulses on scope
-- Monitor MUX_ADVANCE_TIME_US (should be 200-500µs)
-
-## Development
-
-### Adding New Driver
-1. Create folder in `drivers/` (e.g., `drivers/new_driver/`)
-2. Add source files: `new_driver.c`, `new_driver.h`
-3. Add to `CMakeLists.txt`:
-   ```cmake
-   drivers/new_driver/new_driver.c
-   ${CMAKE_CURRENT_SOURCE_DIR}/drivers/new_driver
-   ```
-4. Add README.md documenting the driver
-
-### Modifying Parameters
-- General configuration: Edit `config.h`
-- Driver-specific settings: Edit `drivers/<driver>/<driver>_config.h`
-- BLE commands: Edit `services/ble.c`
-- State machine: Edit `drivers/timers/timer.c`
-- MUX patterns: Edit `drivers/mux/mux_config.h` MUX_PATTERN_* defines
-- DAC hardware: Edit `drivers/dac/dac_config.h`
-
-## Documentation
-
-Each module has detailed README:
-- [Timer Driver](drivers/timers/README.md) - State machine architecture
-- [GPPI Driver](drivers/gppi/README.md) - Hardware event routing
-- [GPIOTE Driver](drivers/gpiote/README.md) - Task-controlled outputs
-- [SAADC Driver](drivers/saadc/README.md) - ADC sampling details
-- [MUX Driver](drivers/mux/README.md) - SPI multiplexer control
-- [DAC Driver](drivers/dac/README.md) - SPI DAC control
-- [BLE Service](services/README.md) - Command protocol and validation
 
 ## License
 
 BSD-3-Clause
-
-## References
-
-- nRF Connect SDK Documentation: https://developer.nordicsemi.com
-- nrfx Driver Documentation: https://nrfx.readthedocs.io
-- Project Repository: https://github.com/kapcina69/GPIOTE-GPPI-TIMER
 
