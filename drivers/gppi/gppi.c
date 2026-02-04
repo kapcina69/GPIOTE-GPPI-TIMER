@@ -94,14 +94,14 @@ nrfx_err_t gppi_setup_connections(uint8_t gpiote_ch_pin1, uint8_t gpiote_ch_pin2
     uint32_t timer_capture_task = nrfx_timer_task_address_get(timer_pulse_ptr, NRF_TIMER_TASK_CAPTURE4);
     
     // Setup GPPI connections for PIN1 only
-    // PIN1: CC0 triggers clear (pulse start/LOW), CC1 triggers set (pulse end/HIGH)
+    // PIN1: CC0 triggers clear (pulse start/LOW = active), CC1 triggers set (pulse end/HIGH = inactive)
     nrfx_gppi_channel_endpoints_setup(gppi_pin1_set, timer_cc0_event, pin1_clr_addr);
     nrfx_gppi_channel_endpoints_setup(gppi_pin1_clr, timer_cc1_event, pin1_set_addr);
     
     // NOTE: PIN2 GPPI connections removed - LED2 stays LOW
     
-    // ADC: CC1 triggers sample, END event captures timestamp
-    nrfx_gppi_channel_endpoints_setup(gppi_adc_trigger, timer_cc1_event, saadc_sample_task);
+    // ADC: CC0 triggers sample (when pin goes LOW = active), END event captures timestamp
+    nrfx_gppi_channel_endpoints_setup(gppi_adc_trigger, timer_cc0_event, saadc_sample_task);
     nrfx_gppi_channel_endpoints_setup(gppi_adc_capture, saadc_end_event, timer_capture_task);
     
     NRFX_LOG_INFO("GPPI connections configured (LED1 only, LED2 stays LOW)");

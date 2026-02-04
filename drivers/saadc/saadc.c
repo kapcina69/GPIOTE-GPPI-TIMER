@@ -99,9 +99,9 @@ static void saadc_handler(nrfx_saadc_evt_t const * p_event)
                 int32_t voltage_ch0 = saadc_sample_to_mv(m_saadc_latest_sample_ch0);
 #if SAADC_DUAL_CHANNEL_ENABLED
                 int32_t voltage_ch1 = saadc_sample_to_mv(m_saadc_latest_sample_ch1);
-                NRFX_LOG_INFO("[ADC] #%u: CH0=%d mV, CH1=%d mV", sample_counter, voltage_ch0, voltage_ch1);
+                printk("[ADC] #%u: CH0=%d mV, CH1=%d mV\n", sample_counter, voltage_ch0, voltage_ch1);
 #else
-                NRFX_LOG_INFO("[ADC] #%u: %d mV", sample_counter, voltage_ch0);
+                printk("[ADC] #%u: %d mV\n", sample_counter, voltage_ch0);
 #endif
             }
 #endif
