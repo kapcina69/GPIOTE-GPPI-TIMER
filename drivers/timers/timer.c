@@ -499,12 +499,13 @@ void timer_set_dac_values(const uint16_t *values, uint8_t count)
     // IRQ lock to prevent race with timer ISR reading dac_values[]
     unsigned int key = irq_lock();
     
-    // Copy DAC values - does NOT affect active_pulse_count
+    // Copy DAC values and clear the remaining slots to zero.
     for (uint8_t i = 0; i < MAX_PULSES_PER_CYCLE; i++) {
         if (i < count) {
             dac_values[i] = values[i];
+        } else {
+            dac_values[i] = 0;
         }
-        // Values beyond count remain unchanged
     }
     
     irq_unlock(key);
