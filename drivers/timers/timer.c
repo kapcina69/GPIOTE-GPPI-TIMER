@@ -93,6 +93,32 @@ static volatile state_t current_state = STATE_PULSE;
 static volatile uint32_t state_transitions = 0;
 static volatile bool system_running = true;
 
+static void prepare_outputs_preload_for_current_state(void)
+{
+    uint16_t pattern;
+    uint16_t dac_value;
+    uint8_t next_idx;
+
+    if (current_state == STATE_PULSE) {
+        next_idx = current_pulse_idx + 1;
+        pattern = (next_idx >= active_pulse_count) ? MUX_PATTERN_PAUSE : mux_patterns[next_idx];
+        dac_value = (next_idx >= active_pulse_count) ? 0 : dac_values[next_idx];
+    } else {
+        pattern = mux_patterns[0];
+        dac_value = dac_values[0];
+    }
+
+    if (mux_prepare_write(pattern) != NRFX_SUCCESS) {
+        /* Keep timing deterministic; next CC1 may skip if transfer is still pending. */
+    }
+
+    #if ENABLE_DAC_PRELOAD
+    if (dac_prepare_value(dac_value) != NRFX_SUCCESS) {
+        /* Keep timing deterministic; next CC1 may skip if transfer is still pending. */
+    }
+    #endif
+}
+
 /**
  * @brief State machine timer handler with DUAL CC channels
  * 
@@ -113,30 +139,7 @@ static void state_timer_handler(nrf_timer_event_t event_type, void * p_context)
     
     // ========== CC_CHANNEL1: MUX PRE-LOAD EVENT ==========
     if (event_type == NRF_TIMER_EVENT_COMPARE1) {
-        if (current_state == STATE_PULSE) {
-            // Pre-load MUX pattern for NEXT pulse
-            uint8_t next_idx = current_pulse_idx + 1;
-            if (next_idx >= active_pulse_count) {
-                // Next state is PAUSE - pre-load pause pattern
-                mux_write(MUX_PATTERN_PAUSE);
-                #if ENABLE_DAC_PRELOAD
-                    dac_set_value(0);
-                #endif
-            } else {
-                // Pre-load next pulse pattern
-                mux_write(mux_patterns[next_idx]);
-                #if ENABLE_DAC_PRELOAD
-                    dac_set_value(dac_values[next_idx]);
-                #endif
-            }
-        } else if (current_state == STATE_PAUSE) {
-            // Pre-load for first pulse (restart cycle)
-            mux_write(mux_patterns[0]);
-            #if ENABLE_DAC_PRELOAD
-                dac_set_value(dac_values[0]);
-            #endif
-        }
-        return;  // Only send pattern, don't change state
+        return;  // Hardware GPPI triggers MUX and DAC START here.
     }
     
     // ========== CC_CHANNEL0: STATE TRANSITION EVENT ==========
@@ -199,7 +202,7 @@ static void state_timer_handler(nrf_timer_event_t event_type, void * p_context)
                                  (pause_ticks - advance_ticks) : 
                                  (pause_ticks / 2);
             nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL1, mux_ticks, true);
-            
+            prepare_outputs_preload_for_current_state();
             nrfx_timer_enable(&timer_state);
         } else {
             // Continue with next pulse
@@ -216,7 +219,7 @@ static void state_timer_handler(nrf_timer_event_t event_type, void * p_context)
                                  (pulse_ticks - advance_ticks) : 
                                  (pulse_ticks / 2);
             nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL1, mux_ticks, true);
-            
+            prepare_outputs_preload_for_current_state();
             nrfx_timer_enable(&timer_state);
         }
     } else if (current_state == STATE_PAUSE) {
@@ -239,7 +242,7 @@ static void state_timer_handler(nrf_timer_event_t event_type, void * p_context)
                              (pulse_ticks - advance_ticks) : 
                              (pulse_ticks / 2);
         nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL1, mux_ticks, true);
-        
+        prepare_outputs_preload_for_current_state();
         nrfx_timer_enable(&timer_state);
     }
 }
@@ -321,7 +324,7 @@ void timer_set_state_pulse(uint32_t single_pulse_us)
                          (pulse_ticks - advance_ticks) : 
                          (pulse_ticks / 2);
     nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL1, mux_ticks, true);
-    
+    prepare_outputs_preload_for_current_state();
     nrfx_timer_enable(&timer_state);
 }
 
@@ -341,7 +344,7 @@ void timer_set_state_pause(uint32_t pause_us)
                          (pause_ticks - advance_ticks) : 
                          (pause_ticks / 2);
     nrfx_timer_compare(&timer_state, NRF_TIMER_CC_CHANNEL1, mux_ticks, true);
-    
+    prepare_outputs_preload_for_current_state();
     nrfx_timer_enable(&timer_state);
 }
 
@@ -387,7 +390,12 @@ void timer_system_stop(void)
     irq_unlock(key);
     
     // Set MUX to off/pause pattern
+    mux_abort_transfer();
     mux_write(MUX_PATTERN_PAUSE);
+    #if ENABLE_DAC_PRELOAD
+    dac_abort_transfer();
+    dac_set_value(0);
+    #endif
     
     // LED2 LOW when system stopped - guaranteed no ISR can change this
     nrf_gpio_pin_clear(OUTPUT_PIN_2);
@@ -409,7 +417,12 @@ void timer_system_start(void)
     nrf_gpio_pin_set(OUTPUT_PIN_2);
     
     // Pre-load MUX for first pulse
+    mux_abort_transfer();
     mux_write(mux_patterns[0]);
+    #if ENABLE_DAC_PRELOAD
+    dac_abort_transfer();
+    dac_set_value(dac_values[0]);
+    #endif
     
     // Get current pulse width
     uint32_t pulse_us = uart_get_pulse_width_ms() * 100;

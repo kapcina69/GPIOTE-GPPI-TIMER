@@ -95,9 +95,10 @@ nrfx_err_t mux_init(nrfx_spim_t *spim)
  */
 nrfx_err_t mux_write(uint16_t data)
 {
-    /* Check if previous transfer is still ongoing */
+    /* Force-stop prepared/active transfer so immediate write can proceed. */
     if (m_transfer_pending) {
-        return NRFX_ERROR_BUSY;  /* Transfer already in progress */
+        nrfx_spim_abort(m_spim_ptr);
+        m_transfer_pending = false;
     }
 
     /* Prepare data */
@@ -120,6 +121,41 @@ nrfx_err_t mux_write(uint16_t data)
 
     /* Return immediately - spim_handler will latch data when done */
     return NRFX_SUCCESS;
+}
+
+nrfx_err_t mux_prepare_write(uint16_t data)
+{
+    if (m_transfer_pending) {
+        return NRFX_ERROR_BUSY;
+    }
+
+    m_tx_buffer[0] = (uint8_t)(data >> 8);
+    m_tx_buffer[1] = (uint8_t)data;
+
+    nrfx_spim_xfer_desc_t xfer = NRFX_SPIM_XFER_TX(m_tx_buffer, 2);
+
+    m_xfer_done = false;
+    m_transfer_pending = true;
+
+    nrfx_err_t err = nrfx_spim_xfer(m_spim_ptr, &xfer, NRFX_SPIM_FLAG_HOLD_XFER);
+    if (err != NRFX_SUCCESS) {
+        m_transfer_pending = false;
+    }
+    return err;
+}
+
+uint32_t mux_start_task_address_get(void)
+{
+    return nrfx_spim_start_task_address_get(m_spim_ptr);
+}
+
+void mux_abort_transfer(void)
+{
+    if (!m_transfer_pending) {
+        return;
+    }
+    nrfx_spim_abort(m_spim_ptr);
+    m_transfer_pending = false;
 }
 
 /**

@@ -51,9 +51,9 @@ nrfx_err_t dac_init(nrfx_spim_t *spim)
     nrf_gpio_pin_set(DAC_CS_PIN);  /* CS high = inactive */
 
     /* Configure SPIM */
-    nrfx_spim_config_t config = NRFX_SPIM_DEFAULT_CONFIG(DAC_SCK_PIN, DAC_MOSI_PIN, 
-                                                          18,
-                                                          19);
+    nrfx_spim_config_t config = NRFX_SPIM_DEFAULT_CONFIG(DAC_SCK_PIN, DAC_MOSI_PIN,
+                                                          NRF_SPIM_PIN_NOT_CONNECTED,
+                                                          NRF_SPIM_PIN_NOT_CONNECTED);
 
     nrfx_err_t status = nrfx_spim_init(spim, &config, dac_spim_handler, NULL);
     if (status != NRFX_SUCCESS) {
@@ -77,10 +77,11 @@ nrfx_err_t dac_init(nrfx_spim_t *spim)
 
 nrfx_err_t dac_set_value(uint16_t value)
 {
-    /* Check if previous transfer is still ongoing */
+    /* Force-stop prepared/active transfer so immediate write can proceed. */
     if (m_transfer_pending) {
-        NRFX_LOG_DEBUG("DAC busy, dropping value");
-        return NRFX_ERROR_BUSY;
+        nrfx_spim_abort(m_spim_ptr);
+        m_transfer_pending = false;
+        nrf_gpio_pin_set(DAC_CS_PIN);
     }
 
     /* Clamp to valid range */
@@ -121,6 +122,49 @@ nrfx_err_t dac_set_value(uint16_t value)
 
     /* Return immediately - handler will de-assert CS when done */
     return NRFX_SUCCESS;
+}
+
+nrfx_err_t dac_prepare_value(uint16_t value)
+{
+    if (m_transfer_pending) {
+        return NRFX_ERROR_BUSY;
+    }
+
+    if (value > DAC_MAX_VALUE) {
+        value = DAC_MAX_VALUE;
+    }
+
+    m_tx_buffer[0] = 0x30;
+    m_tx_buffer[1] = (uint8_t)(value >> 4);
+    m_tx_buffer[2] = (uint8_t)(value << 4);
+
+    nrf_gpio_pin_clear(DAC_CS_PIN);
+
+    nrfx_spim_xfer_desc_t xfer = NRFX_SPIM_XFER_TX(m_tx_buffer, 3);
+    m_transfer_pending = true;
+
+    nrfx_err_t err = nrfx_spim_xfer(m_spim_ptr, &xfer, NRFX_SPIM_FLAG_HOLD_XFER);
+    if (err != NRFX_SUCCESS) {
+        m_transfer_pending = false;
+        nrf_gpio_pin_set(DAC_CS_PIN);
+    }
+    return err;
+}
+
+uint32_t dac_start_task_address_get(void)
+{
+    return nrfx_spim_start_task_address_get(m_spim_ptr);
+}
+
+void dac_abort_transfer(void)
+{
+    if (!m_transfer_pending) {
+        return;
+    }
+
+    nrfx_spim_abort(m_spim_ptr);
+    m_transfer_pending = false;
+    nrf_gpio_pin_set(DAC_CS_PIN);
 }
 
 bool dac_is_ready(void)

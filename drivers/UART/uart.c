@@ -262,10 +262,10 @@ static void handle_son(const char *args)
     if (!timer_system_is_running()) {
         timer_system_start();
         printk("    Action: START stimulation (RUN mode)\n");
-        uart_send_response("SONOK");
+        uart_send_response("OK");
     } else {
         printk("    Action: Already in RUN mode\n");
-        uart_send_response("SONOK");
+        uart_send_response("ERR");
     }
 }
 
@@ -281,10 +281,10 @@ static void handle_soff(const char *args)
     if (timer_system_is_running()) {
         timer_system_stop();
         printk("    Action: STOP stimulation (STOP mode)\n");
-        uart_send_response("OFFOK");
+        uart_send_response("OK");
     } else {
         printk("    Action: Already in STOP mode\n");
-        uart_send_response("OFFOK");
+        uart_send_response("ERR");
     }
 }
 
@@ -306,10 +306,10 @@ static void handle_pw(const char *args)
         printk("    Action: Set Pulse Width = %d (0x%02X)\n", 
                (int)current_pulse_width, (int)current_pulse_width);
         atomic_set(&parameters_updated_flag, 1);
-        uart_send_response("PWOK");
+        uart_send_response("OK");
     } else {
         printk("    Action: Pulse Width out of range (%d, 0x%02X)\n", pw, pw);
-        uart_send_response("PWERR");
+        uart_send_response("ERR");
     }
 }
 
@@ -353,7 +353,7 @@ static void handle_sa(const char *args)
     
     if (count == 0) {
         LOG_WRN("SA: No DAC values parsed");
-        uart_send_response("SAERR");
+        uart_send_response("ERR");
         return;
     }
     
@@ -363,7 +363,7 @@ static void handle_sa(const char *args)
     LOG_INF("SA: Set %d DAC values", count);
     printk("    Action: Set %d DAC values\n", count);
     
-    uart_send_response("SAOK");
+    uart_send_response("OK");
 }
 
 /**
@@ -378,7 +378,7 @@ static void handle_sf(const char *args)
         uint32_t max_freq = get_max_frequency(current_pulse_width);
         if (freq > max_freq) {
             LOG_WRN("Frequency %d Hz too high for pulse width %u", freq, (unsigned)current_pulse_width);
-            uart_send_response("SFERR");
+            uart_send_response("ERR");
             return;
         }
         
@@ -388,10 +388,10 @@ static void handle_sf(const char *args)
         
         uint32_t pause = frequency_to_pause_ms(freq);
         LOG_INF("Frequency set to %d Hz (pause: %u ms)", freq, pause);
-        uart_send_response("SFOK");
+        uart_send_response("OK");
     } else {
         printk("    Action: Frequency out of range (%d Hz, hex: 0x%02X)\n", freq, freq);
-        uart_send_response("SFERR");
+        uart_send_response("ERR");
     }
 }
 
@@ -435,7 +435,7 @@ static void handle_sc(const char *args)
     
     if (count == 0) {
         LOG_WRN("SC: No patterns parsed");
-        uart_send_response("SCERR");
+        uart_send_response("ERR");
         return;
     }
     
@@ -446,7 +446,7 @@ static void handle_sc(const char *args)
     LOG_INF("SC: Set %d patterns, active pulses: %d", count, active);
     printk("    Action: Set %d MUX patterns, active pulses: %d\n", count, active);
     
-    uart_send_response("SCOK");
+    uart_send_response("OK");
 }
 
 /* ============================================================
@@ -474,7 +474,13 @@ static void process_command(const char *cmd)
     
     // Prolazi kroz lookup tabelu i traži odgovarajući handler
     for (size_t i = 0; i < ARRAY_SIZE(cmd_table); i++) {
-        if (strncmp(cmd, cmd_table[i].prefix, cmd_table[i].prefix_len) == 0) {
+        bool is_match = false;
+        if (cmd_table[i].has_args) {
+            is_match = strncmp(cmd, cmd_table[i].prefix, cmd_table[i].prefix_len) == 0;
+        } else {
+            is_match = strcmp(cmd, cmd_table[i].prefix) == 0;
+        }
+        if (is_match) {
             // Pronađena komanda - pozovi handler
             const char *args = cmd_table[i].has_args ? (cmd + cmd_table[i].prefix_len) : NULL;
             cmd_table[i].handler(args);

@@ -44,6 +44,29 @@ nrfx_err_t mux_init(nrfx_spim_t *spim);
 nrfx_err_t mux_write(uint16_t data);
 
 /**
+ * @brief Prepare 16-bit MUX write without starting transfer
+ *
+ * Configures EasyDMA buffers and keeps transfer on HOLD.
+ * Transfer start must be triggered via SPIM START task (for example over GPPI).
+ *
+ * @param data 16-bit channel data (bit position = channel number)
+ * @return NRFX_SUCCESS on success, error code otherwise
+ */
+nrfx_err_t mux_prepare_write(uint16_t data);
+
+/**
+ * @brief Return SPIM START task address for GPPI wiring
+ *
+ * @return Peripheral task address
+ */
+uint32_t mux_start_task_address_get(void);
+
+/**
+ * @brief Abort any prepared or active transfer
+ */
+void mux_abort_transfer(void);
+
+/**
  * @brief Check if MUX transfer is complete
  * 
  * @return true if no transfer in progress, false otherwise
